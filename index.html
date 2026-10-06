@@ -571,12 +571,17 @@ function renderActivation(){
   // columns line up exactly beneath the weekly schedule's Sun..Sat columns)
   h+="<thead>";
   h+="<tr><td class='spacer'></td><th class='calbar' colspan='7'>**For ACTIVATION Only**</th></tr>";
-  // Each day-of-week column has a FIXED, consistent team of up to 3 agents.
-  // Headers always show that dedicated team (same agents every week for the column).
-  const teams = computeColumnTeams();
+  // Column headers show the CSR IIs actually assigned in each column (distinct, date order).
+  const staffedByDow=[[],[],[],[],[],[],[]];
+  const seenByDow=[new Set(),new Set(),new Set(),new Set(),new Set(),new Set(),new Set()];
+  for(let d=1; d<=dim; d++){
+    const dw=new Date(viewYear,viewMonth,d).getDay();
+    const rec=am[dateKey(viewYear,viewMonth,d)];
+    if(rec){ const mem=memberById(rec.memberId); if(mem){ const fn=firstName(mem.name); if(!seenByDow[dw].has(fn)){ seenByDow[dw].add(fn); staffedByDow[dw].push(fn); } } }
+  }
   h+="<tr><td class='spacer'></td>";
   for(let dow=0;dow<7;dow++){
-    const txt = teams[dow].map(id=>firstName((memberById(id)||{}).name||"")).join(", ");
+    const txt = staffedByDow[dow].join(", ");
     h+="<th class='dow'>"+DOW_FULL[dow]+"<span class='pool'>"+escapeHtml(txt)+"</span></th>";
   }
   h+="</tr></thead><tbody>";
@@ -634,35 +639,12 @@ function renderActivation(){
 }
 
 /* ============================================================
-   COLUMN TEAMS + AUTO-ASSIGN ENGINE
-   Each day-of-week column has a FIXED, consistent team of up to 3 agents
-   (the same trio every week for that column). computeColumnTeams() derives
-   those teams deterministically from the weekly schedule, so headers and the
-   auto-assigner always agree. Auto-assign distributes a column's dates among
-   its own team (load-balanced); it only BORROWS an agent from another column
-   when the team can't cover a date (e.g. all on VL/OOO) -> "additional
-   assignment" overflow. Manual assignments are preserved.
+   AUTO-ASSIGN ENGINE — EQUAL DISTRIBUTION
+   Spreads activation days as evenly as possible across all CSR IIs: each day is
+   given to the eligible agent (scheduled that weekday & not on VL/OOO) who has the
+   fewest activation days so far. Respects the weekly schedule + VL/OOO, assigns one
+   per day, and preserves any manual assignments (which also count toward balance).
    ============================================================ */
-const MAX_STAFF_PER_COLUMN = 3;   // fixed team size per day-of-week column (2-3)
-
-function idxOf(id){ return members.findIndex(mm=>mm.id===id); }
-
-function computeColumnTeams(){
-  const teams=[[],[],[],[],[],[],[]];
-  const colCount={}; members.forEach(mm=>colCount[mm.id]=0);  // how many columns each agent is on
-  for(let dow=0; dow<7; dow++){                                // fixed order -> deterministic & stable
-    const avail=members.filter(mm=>working(mm.id,dow)).map(mm=>mm.id);
-    if(avail.length===0) continue;
-    const take=Math.min(MAX_STAFF_PER_COLUMN, avail.length);
-    // pick agents who currently serve the fewest columns (spreads agents evenly), tie-break by order
-    const sorted=avail.slice().sort((a,b)=> (colCount[a]-colCount[b]) || (idxOf(a)-idxOf(b)) );
-    const team=sorted.slice(0,take);
-    team.forEach(id=>colCount[id]++);
-    teams[dow]=team;
-  }
-  return teams;
-}
-
 function autoAssign(){
   if(!canEdit()){ toast("Only the admin can run auto-assignment.","err"); return; }
   const dim=new Date(viewYear,viewMonth+1,0).getDate();
@@ -673,39 +655,25 @@ function autoAssign(){
   const total={}; members.forEach(mm=>total[mm.id]=0);
   Object.keys(m).forEach(dk=>{ const r=m[dk]; if(r && dk.slice(0,7)===mPrefix && total[r.memberId]!=null) total[r.memberId]++; });
 
-  const datesByDow=[[],[],[],[],[],[],[]];
-  for(let d=1; d<=dim; d++){ datesByDow[new Date(viewYear,viewMonth,d).getDay()].push(d); }
+  // least-loaded eligible agent (tie-break by fixed member order for determinism)
+  const argmin=(ids)=>{ let best=null,bc=Infinity; ids.forEach(id=>{ if(total[id]<bc){ bc=total[id]; best=id; } }); return best; };
 
-  const teams=computeColumnTeams();
-  const argminId=(ids)=>{ let best=null,bc=Infinity; ids.forEach(id=>{ if(total[id]<bc){ bc=total[id]; best=id; } }); return best; };
-
-  let assignedCount=0, borrowed=0;
-
-  for(let dow=0; dow<7; dow++){
-    const team=teams[dow];
-    if(!team || team.length===0) continue;
-    for(const d of datesByDow[dow]){
-      const dk=dateKey(viewYear,viewMonth,d);
-      if(m[dk]) continue;                                       // preserve manual / existing
-      // 1) try the column's own fixed team (available & not on VL/OOO), least-loaded first
-      let pool=team.filter(id=>working(id,dow) && !onVL(id,dk));
-      let isBorrow=false;
-      if(pool.length===0){
-        // 2) overflow: borrow an available agent from another column
-        pool=members.filter(mm=>working(mm.id,dow) && !onVL(mm.id,dk)).map(mm=>mm.id).filter(id=>!team.includes(id));
-        isBorrow=true;
-      }
-      if(pool.length===0) continue;
-      const pick=argminId(pool);
-      m[dk]={memberId:pick, source:"auto"};
-      total[pick]++; assignedCount++; if(isBorrow) borrowed++;
-    }
+  let assignedCount=0;
+  for(let d=1; d<=dim; d++){
+    const dow=new Date(viewYear,viewMonth,d).getDay();
+    const dk=dateKey(viewYear,viewMonth,d);
+    if(m[dk]) continue;                                            // preserve manual / existing
+    const eligible=members.filter(mm=>working(mm.id,dow) && !onVL(mm.id,dk)).map(mm=>mm.id);
+    if(eligible.length===0) continue;
+    const pick=argmin(eligible);
+    m[dk]={memberId:pick, source:"auto"};
+    total[pick]++; assignedCount++;
   }
 
   saveAll(); renderActivation();
   const activePool=members.filter(mm=>[0,1,2,3,4,5,6].some(dw=>working(mm.id,dw))).map(mm=>total[mm.id]);
   const spread = activePool.length ? (Math.min(...activePool)+"-"+Math.max(...activePool)) : "0";
-  toast(assignedCount+" day(s) auto-assigned (load "+spread+"/CSR II"+(borrowed?(", "+borrowed+" borrowed to cover gaps"):"")+").","ok");
+  toast(assignedCount+" day(s) auto-assigned, evenly distributed (load "+spread+" days/CSR II).","ok");
 }
 
 /* ============================================================
