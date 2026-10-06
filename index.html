@@ -603,13 +603,14 @@ function renderActivation(){
           +"<span class='sf'>Add Email to SF</span></div>";
       }
       if(isAssignable){
-        // manual assignment dropdown
-        const avail=members.filter(m=>working(m.id,dow)&&!onVL(m.id,dk));
+        // manual assignment dropdown — ANY member can be assigned (override availability).
+        // A small tag shows who is off-shift / on VL-OOO, but all remain selectable.
         let opts="<option value=''>-- assign --</option>";
         members.forEach(m=>{
-          const can=working(m.id,dow)&&!onVL(m.id,dk);
-          opts+="<option value='"+m.id+"'"+(rec&&rec.memberId===m.id?" selected":"")+(can?"":" disabled")+">"
-            +escapeHtml(firstName(m.name))+(can?"":" (unavail)")+"</option>";
+          const vl=onVL(m.id,dk), work=working(m.id,dow);
+          const tag = vl ? " (VL/OOO)" : (work ? "" : " (off)");
+          opts+="<option value='"+m.id+"'"+(rec&&rec.memberId===m.id?" selected":"")+">"
+            +escapeHtml(firstName(m.name))+tag+"</option>";
         });
         h+="<select class='assignsel' data-dk='"+dk+"'"+(canEdit()?"":" disabled")+">"+opts+"</select>";
       }
