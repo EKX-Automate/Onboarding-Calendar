@@ -305,6 +305,7 @@ let members = PLACEHOLDER_MEMBERS.slice();
 let isAdmin = false;
 let signedIn = false;
 let currentUserEmail = "";
+let _suppressCloudSave = false;   // don't auto-save while initial SharePoint load runs
 
 let cur = new Date(2026, 9, 1); // default Oct 2026 to match sample; replaced by Today on load if desired
 let viewYear = cur.getFullYear();
@@ -364,7 +365,7 @@ function saveAll(){
   // local cache / offline fallback
   lsSet("csr_schedule_m",scheduleStore); lsSet("csr_assign",assignStore); lsSet("csr_vl",vlByDate);
   // SharePoint is the system of record when the admin is signed in
-  if(signedIn && isAdmin && typeof scheduleCloudSave==="function") scheduleCloudSave();
+  if(signedIn && isAdmin && !_suppressCloudSave && typeof scheduleCloudSave==="function") scheduleCloudSave();
 }
 
 /* ---------- helpers ---------- */
@@ -890,17 +891,32 @@ function applyRole(){
 /* ============================================================
    AUTH  (RULES 2-5)
    ============================================================ */
+/* Serialized token acquisition: dedupe concurrent callers into ONE request so we
+   never fire multiple interactive popups (the cause of interaction_in_progress). */
+let _tokenInFlight = null;
 async function getToken(){
-  const instance = await msalReady;
-  const account = instance.getActiveAccount() || instance.getAllAccounts()[0];
-  if(!account) throw new Error("Not signed in");
-  try{
-    const r = await instance.acquireTokenSilent({ scopes: SCOPES, account });
-    return r.accessToken;
-  }catch(e){
-    const r = await instance.acquireTokenPopup({ scopes: SCOPES });
-    return r.accessToken;
-  }
+  if(_tokenInFlight) return _tokenInFlight;
+  _tokenInFlight = (async () => {
+    const instance = await msalReady;
+    const account = instance.getActiveAccount() || instance.getAllAccounts()[0];
+    if(!account) throw new Error("Not signed in");
+    try{
+      const r = await instance.acquireTokenSilent({ scopes: SCOPES, account });
+      return r.accessToken;
+    }catch(e){
+      // another interaction is mid-flight — wait briefly, then retry silently
+      if(e && e.errorCode === "interaction_in_progress"){
+        await new Promise(res=>setTimeout(res, 800));
+        const r = await instance.acquireTokenSilent({ scopes: SCOPES, account });
+        return r.accessToken;
+      }
+      // genuine interactive consent needed
+      const r = await instance.acquireTokenPopup({ scopes: SCOPES, account });
+      return r.accessToken;
+    }
+  })();
+  try{ return await _tokenInFlight; }
+  finally{ _tokenInFlight = null; }
 }
 
 async function signIn(){
@@ -925,7 +941,7 @@ async function signOut(){
   const instance = await msalReady;
   signedIn=false; isAdmin=false; currentUserEmail="";
   members = PLACEHOLDER_MEMBERS.slice();
-  _dataListId=null; _dataItemIndex={}; setCloudStatus("local");
+  _dataListId=null; _dataItemIndex={}; _syncListId=null; setCloudStatus("local");
   document.getElementById("whoami").textContent="";
   document.getElementById("signOutBtn").classList.add("hidden");
   document.getElementById("signInBtn").classList.remove("hidden");
@@ -942,12 +958,14 @@ async function onSignedIn(account){
   document.getElementById("signInBtn").classList.add("hidden");
   document.getElementById("signOutBtn").classList.remove("hidden");
   applyRole();
+  _suppressCloudSave = true;   // avoid auto-save storms while we load from SharePoint
   // fetch CSR 2 members from SharePoint
   try{ await loadMembersFromSharePoint(); }
   catch(e){ toast("Could not load members from SharePoint: "+e.message,"err"); }
   // migrate/load dashboard data from SharePoint (system of record)
   try{ await cloudLoadAll(); }
   catch(e){ toast("Could not load dashboard data from SharePoint: "+e.message,"err"); }
+  _suppressCloudSave = false;
 }
 
 /* ===== RULES 3 : button state controlled by msalReady ===== */
@@ -1164,30 +1182,69 @@ function scheduleCloudSave(){
   _cloudTimer=setTimeout(cloudSaveNow, 1200);
 }
 
-/* sync current-month assignments to the Onboarding Activation Schedule list */
+/* Mirror the "For ACTIVATION Only" calendar for the selected month into the
+   "Onboarding Activation Schedule" SharePoint list. Reconciles both directions:
+   creates new entries, updates changed ones, and deletes removed ones — keyed by
+   date — so the list always reflects the dashboard. Runs on the manual button and
+   automatically after every change (via cloudSaveNow). */
+let _syncListId = null;
+async function getSyncListId(){
+  if(_syncListId) return _syncListId;
+  const list = await findList(SYNC_LIST);
+  if(!list) throw new Error("List '"+SYNC_LIST+"' not found");
+  _syncListId = list.id;
+  return _syncListId;
+}
+function assignTitle(dk, mem){
+  const [y,mo,da]=dk.split("-").map(Number);
+  return dk+" | "+mem.name+" - run "+prevDayName(y,mo-1,da)+" report";
+}
 async function syncToSharePoint(silent){
   if(!signedIn){ if(!silent) toast("Sign in first to sync.","err"); return; }
   if(!isAdmin){ if(!silent) toast("Only the admin can sync to SharePoint.","err"); return; }
   try{
-    const list=await findList(SYNC_LIST);
-    if(!list){ if(!silent) toast("List '"+SYNC_LIST+"' not found.","err"); return; }
     const siteId=await getSiteId();
-    // existing titles to avoid duplicates
-    const ex=await graph("/sites/"+siteId+"/lists/"+list.id+"/items?expand=fields&$top=500");
-    const existing=new Set((ex.value||[]).map(i=>(i.fields&&i.fields.Title)||""));
+    const listId=await getSyncListId();
+    const prefix=dateKey(viewYear,viewMonth,1).slice(0,7); // "YYYY-MM"
+
+    // existing entries for THIS month, keyed by their date (our items start with the ISO date)
+    const ex=await graph("/sites/"+siteId+"/lists/"+listId+"/items?expand=fields&$top=500");
+    const byDate={};
+    (ex.value||[]).forEach(it=>{
+      const t=(it.fields&&it.fields.Title)||"";
+      const mm=t.match(/^(\d{4}-\d{2}-\d{2})/);
+      if(mm && mm[1].slice(0,7)===prefix) byDate[mm[1]]={ id:it.id, title:t };
+    });
+
     const am=assignMap();
-    let created=0, skipped=0, failed=0;
+    let created=0, updated=0, removed=0, failed=0;
+
+    // create / update each assigned day
     for(const dk of Object.keys(am)){
       const rec=am[dk]; const mem=memberById(rec.memberId); if(!mem) continue;
-      const [y,mo,da]=dk.split("-").map(Number);
-      const title=dk+" | "+mem.name+" - run "+prevDayName(y,mo-1,da)+" report";
-      if(existing.has(title)){ skipped++; continue; }
-      try{
-        await graph("/sites/"+siteId+"/lists/"+list.id+"/items",{method:"POST",body:JSON.stringify({fields:{Title:title}})});
-        created++;
-      }catch(e){ failed++; }
+      const title=assignTitle(dk, mem);
+      const cur=byDate[dk];
+      if(cur){
+        if(cur.title!==title){
+          const r=await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+cur.id+"/fields","PATCH",{Title:title});
+          r.ok ? updated++ : failed++;
+        }
+        delete byDate[dk];               // handled -> not stale
+      }else{
+        try{
+          await graph("/sites/"+siteId+"/lists/"+listId+"/items",{method:"POST",body:JSON.stringify({fields:{Title:title}})});
+          created++;
+        }catch(e){ failed++; }
+      }
     }
-    if(!silent) toast("Sync done — created "+created+", skipped "+skipped+(failed?(", failed "+failed):""),"ok");
+
+    // delete entries for this month that no longer have an assignment
+    for(const dk of Object.keys(byDate)){
+      const r=await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+byDate[dk].id,"DELETE");
+      r.ok ? removed++ : failed++;
+    }
+
+    if(!silent) toast("Synced to '"+SYNC_LIST+"' — "+created+" new, "+updated+" updated, "+removed+" removed"+(failed?(", "+failed+" failed"):""),"ok");
   }catch(e){ if(!silent) toast("Sync failed: "+e.message,"err"); }
 }
 
