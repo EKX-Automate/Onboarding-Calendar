@@ -99,6 +99,17 @@
   .hidden{display:none !important;}
   .note{font-size:11.5px;color:#6a7482;padding:6px 18px;}
 
+  /* settings modal */
+  .overlay{position:fixed;inset:0;background:rgba(0,20,74,.35);z-index:10001;display:flex;align-items:center;justify-content:center;}
+  .modal{background:#fff;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.3);padding:22px 24px;width:min(560px,92vw);}
+  .modal h3{margin:0 0 14px;color:var(--deep-navy);font-size:18px;}
+  .modal .fld{display:block;margin-bottom:8px;}
+  .modal .fld span{display:block;font-weight:700;color:#223;margin-bottom:5px;font-size:12.5px;}
+  .modal .fld small{font-weight:500;color:#8a95a3;}
+  .modal input[type=text]{width:100%;font-size:13px;padding:9px 10px;}
+  .modal .hint2{font-size:11.5px;color:#8a95a3;margin:4px 0 16px;}
+  .modal-actions{display:flex;justify-content:flex-end;gap:10px;}
+
   /* shift cell context menu */
   #cellMenu{position:fixed;z-index:10000;background:#fff;border:1px solid #c3ccd8;border-radius:8px;
     box-shadow:0 8px 24px rgba(0,0,0,.18);padding:5px;min-width:200px;display:none;}
@@ -128,8 +139,26 @@
     <div class="userbox">
       <span id="roleBadge" class="badge view">Viewer (read-only)</span>
       <span id="whoami"></span>
+      <button class="btn ghost small" id="shareBtn">Copy link</button>
+      <button class="btn ghost small" id="settingsBtn">Settings</button>
       <button class="btn" id="signInBtn" disabled>Initializing...</button>
       <button class="btn ghost small hidden" id="signOutBtn">Sign out</button>
+    </div>
+  </div>
+
+  <!-- SETTINGS MODAL -->
+  <div id="settingsOverlay" class="overlay hidden">
+    <div class="modal">
+      <h3>Settings</h3>
+      <label class="fld">
+        <span>Dashboard URL <small>(used for sign-in redirect, shareable links &amp; emails)</small></span>
+        <input type="text" id="dashUrlInput" placeholder="https://..." />
+      </label>
+      <p class="hint2">This must match where the dashboard is hosted and the redirect URI registered in Azure (SPA).</p>
+      <div class="modal-actions">
+        <button class="btn ghost small" id="settingsCancel">Close</button>
+        <button class="btn small" id="settingsSave">Save</button>
+      </div>
     </div>
   </div>
 
@@ -201,6 +230,12 @@
 /* ---------- Admin ---------- */
 const ADMIN_EMAIL = "ma.theresa.cassandra.choy@sap.com";
 
+/* ---------- Dashboard URL (used for sign-in redirect, shareable links & emails) ---------- */
+const DEFAULT_DASHBOARD_URL = "https://ekx-automate.github.io/Onboarding-Calendar/";
+function getDashboardUrl(){
+  try{ return localStorage.getItem("csr_dashboard_url") || DEFAULT_DASHBOARD_URL; }catch(e){ return DEFAULT_DASHBOARD_URL; }
+}
+
 /* ---------- SharePoint / Graph config ---------- */
 const SITE_PATH   = "sap.sharepoint.com:/sites/214668";
 const MASTERLIST  = "USD Manila - Masterlist";
@@ -213,7 +248,7 @@ const msalConfig = {
   auth: {
     clientId: "0965a0ca-c6be-45e4-a1f0-0bf0f7cca86e",
     authority: "https://login.microsoftonline.com/42f7676c-f455-423c-82f6-dc2d99791af7",
-    redirectUri: "https://static.ekx.cloud.sap"
+    redirectUri: "https://ekx-automate.github.io/Onboarding-Calendar/"
   },
   cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
 };
@@ -800,6 +835,35 @@ document.getElementById("syncBtn").addEventListener("click",syncToSharePoint);
 document.getElementById("signInBtn").addEventListener("click",signIn);
 document.getElementById("signOutBtn").addEventListener("click",signOut);
 
+/* ---------- Share link + Settings (Dashboard URL) ---------- */
+function copyShareLink(){
+  const url=getDashboardUrl();
+  const done=()=>toast("Dashboard link copied: "+url,"ok");
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(done).catch(()=>toast(url)); }
+  else { toast(url); }
+}
+document.getElementById("shareBtn").addEventListener("click",copyShareLink);
+document.getElementById("settingsBtn").addEventListener("click",()=>{
+  document.getElementById("dashUrlInput").value=getDashboardUrl();
+  document.getElementById("dashUrlInput").disabled=!canEdit();
+  document.getElementById("settingsSave").style.display=canEdit()?"":"none";
+  document.getElementById("settingsOverlay").classList.remove("hidden");
+});
+document.getElementById("settingsCancel").addEventListener("click",()=>{
+  document.getElementById("settingsOverlay").classList.add("hidden");
+});
+document.getElementById("settingsSave").addEventListener("click",()=>{
+  if(!canEdit()){ toast("Only the admin can change settings.","err"); return; }
+  const v=(document.getElementById("dashUrlInput").value||"").trim();
+  if(!/^https?:\/\//i.test(v)){ toast("Enter a valid https URL.","err"); return; }
+  try{ localStorage.setItem("csr_dashboard_url", v); }catch(e){}
+  document.getElementById("settingsOverlay").classList.add("hidden");
+  toast("Dashboard URL saved. All shareable links & emails will use it.","ok");
+});
+document.getElementById("settingsOverlay").addEventListener("click",e=>{
+  if(e.target.id==="settingsOverlay") document.getElementById("settingsOverlay").classList.add("hidden");
+});
+
 /* ============================================================
    ROLE UI
    ============================================================ */
@@ -904,6 +968,14 @@ async function graph(path, opts){
   }));
   if(!r.ok){ throw new Error("Graph "+r.status+": "+(await r.text()).slice(0,180)); }
   return r.status===204 ? null : r.json();
+}
+/* like graph() but returns {ok,status} instead of throwing (for conditional upsert retries) */
+async function graphRaw(path, method, bodyObj){
+  const token=await getToken();
+  const init={ method, headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" } };
+  if(bodyObj!==undefined) init.body=JSON.stringify(bodyObj);
+  const r=await fetch(GRAPH+path, init);
+  return { ok:r.ok, status:r.status };
 }
 let _siteId=null;
 async function getSiteId(){ if(_siteId) return _siteId; const s=await graph("/sites/"+SITE_PATH); _siteId=s.id; return _siteId; }
