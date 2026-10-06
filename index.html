@@ -1043,7 +1043,7 @@ const NAME_FIELDS = ["FullName","EmployeeName","Name","Title","Agent","CSRName",
 const DESIG_FIELDS= ["Designation","Role","Position","JobTitle","Title2","Account","field_2"];
 const EMAIL_FIELDS= ["Email","EMail","WorkEmail","Mail","field_3"];
 function pick(fields, cands){ for(const c of cands){ if(fields[c]!=null && String(fields[c]).trim()!=="") return String(fields[c]).trim(); } return ""; }
-function isCSR2(v){ const s=String(v).replace(/\s+/g,"").toUpperCase(); return s==="CSR2" || /CSR2(\b|[^0-9])/.test(s) || /c\s*s\s*r\s*2/i.test(String(v)); }
+function isCSR2(v){ const s=String(v).toUpperCase().replace(/[^A-Z0-9]/g,""); return s.indexOf("CSR2")>=0 || s.indexOf("CSRII")>=0; }
 /* is this a CSR 2 row? check the designation candidates first, then ANY string field */
 function rowIsCSR2(f){
   const d=pick(f,DESIG_FIELDS);
@@ -1073,8 +1073,11 @@ async function loadMembersFromSharePoint(){
     ensureSchedule(); saveAll();
     toast("Loaded "+members.length+" CSR 2 member(s) from SharePoint.","ok");
   }else{
-    console.warn("[Masterlist] read "+totalRows+" rows but matched 0 CSR 2. Check the designation column name/value.");
-    toast("No CSR 2 members matched in Masterlist ("+totalRows+" rows read). Keeping existing roster.","err");
+    const sample=[];
+    try{ const r2=await graph("/sites/"+siteId+"/lists/"+list.id+"/items?expand=fields&$top=3");
+      (r2.value||[]).forEach(it=>sample.push(it.fields)); }catch(e){}
+    console.warn("[Masterlist] read "+totalRows+" rows, matched 0 CSR 2. Sample rows (inspect column names/values):", sample);
+    toast("No CSR 2/CSR II matched in Masterlist ("+totalRows+" rows). Open Console to see the column names/values so we can map it. Keeping existing roster.","err");
   }
   renderAll();
 }
@@ -1103,46 +1106,48 @@ function setCloudStatus(state){
   el.textContent=t; el.style.background=bg; el.style.color=fg;
 }
 
-/* ---------- Document-library (drive) JSON store ----------
-   The shared state is a single JSON file in the site's default document library.
-   Writing a file needs only normal Contribute access (not list-creation rights),
-   and viewers read it with normal Read access. */
-async function driveGetJson(path){
-  const siteId=await getSiteId();
-  const token=await getToken();
-  const r=await fetch(GRAPH+"/sites/"+siteId+"/drive/root:/"+encodeURIComponent(path)+":/content",{
-    headers:{ "Authorization":"Bearer "+token }
-  });
-  if(r.status===404) return null;                 // not created yet
-  if(!r.ok){ const t=await r.text().catch(()=> ""); console.error("[Drive GET error]",r.status,t); throw new Error("Graph GET "+r.status+" (drive file) — "+(t||"").slice(0,200)); }
-  return r.json();
+/* ---------- Shared data store = a SharePoint LIST (CORS-safe item read/write) ----------
+   We DO NOT create the list (that needs elevated rights). A site owner creates it once:
+   a list named DATA_LIST with a multi-line text column named DATA_COL ("DataJson").
+   The app only reads/writes ITEMS, which needs just Contribute (admin) / Read (viewers)
+   and works over CORS from the GitHub Pages origin. */
+let _cloudBusy=false, _cloudPending=false;
+async function getDataListId(){
+  if(_dataListId) return _dataListId;
+  const list=await findList(DATA_LIST);
+  if(!list) return null;
+  _dataListId=list.id;
+  return _dataListId;
 }
-async function drivePutJson(path, obj){
-  const siteId=await getSiteId();
-  const token=await getToken();
-  const r=await fetch(GRAPH+"/sites/"+siteId+"/drive/root:/"+encodeURIComponent(path)+":/content",{
-    method:"PUT",
-    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
-    body: JSON.stringify(obj)
-  });
-  if(!r.ok){ const t=await r.text().catch(()=> ""); console.error("[Drive PUT error]",r.status,t); throw new Error("Graph PUT "+r.status+" (drive file) — "+(t||"").slice(0,200)); }
-  return r.json();
-}
+const DATA_SETUP_MSG = "Shared data list '"+DATA_LIST+"' not found. A site owner must create it once on "+SITE_PATH.replace('sap.sharepoint.com:','sap.sharepoint.com')+" (a list named '"+DATA_LIST+"' with a multi-line text column '"+DATA_COL+"').";
 
-/* read all app state from the shared JSON file into memory (read-only for viewers) */
+/* read all app state from the data list into memory (read-only for viewers) */
 async function cloudLoadAll(){
   setCloudStatus("loading");
   try{
-    const data=await driveGetJson(DATA_FILE);
-    let got=false;
-    if(data && typeof data==="object"){
-      if(data.scheduleStore){ scheduleStore=data.scheduleStore; got=true; }
-      if(data.assignStore){ assignStore=data.assignStore; got=true; }
-      if(data.vlByDate){ vlByDate=data.vlByDate; got=true; }
-      const onlyPlaceholders = members.every(m=>String(m.id).startsWith("ph"));
-      if(data.members && data.members.length && onlyPlaceholders){
-        members = data.members.map(m=>({id:m.id,name:m.name,email:m.email||""}));
-      }
+    const siteId=await getSiteId();
+    const listId=await getDataListId();
+    if(!listId){
+      setCloudStatus("error");
+      toast((isAdmin?DATA_SETUP_MSG:"Shared data isn't set up yet (ask the admin). ")+" Showing local data for now.","err");
+      return;
+    }
+    const r=await graph("/sites/"+siteId+"/lists/"+listId+"/items?expand=fields&$top=50");
+    _dataItemIndex={};
+    let got=false, cloudMembers=null;
+    (r.value||[]).forEach(it=>{
+      const f=it.fields||{}; const key=f.Title; if(!key) return;
+      _dataItemIndex[key]=it.id;
+      let val=null; try{ val=JSON.parse(f[DATA_COL]||"null"); }catch(e){ val=null; }
+      if(val==null) return;
+      if(key==="scheduleStore"){ scheduleStore=val; got=true; }
+      else if(key==="assignStore"){ assignStore=val; got=true; }
+      else if(key==="vlByDate"){ vlByDate=val; got=true; }
+      else if(key==="members"){ cloudMembers=val; }
+    });
+    const onlyPlaceholders = members.every(m=>String(m.id).startsWith("ph"));
+    if(cloudMembers && cloudMembers.length && onlyPlaceholders){
+      members = cloudMembers.map(m=>({id:m.id,name:m.name,email:m.email||""}));
     }
     lsSet("csr_schedule_m",scheduleStore); lsSet("csr_assign",assignStore); lsSet("csr_vl",vlByDate);
     loadMonthSchedule();
@@ -1151,29 +1156,40 @@ async function cloudLoadAll(){
     if(got) toast("Loaded dashboard data from SharePoint.","ok");
     else if(isAdmin) toast("Connected to SharePoint (no data yet) \u2014 saving your current data now\u2026","ok");
     else toast("Connected to SharePoint, but the admin hasn't saved any data yet.","err");
-    if(!got && isAdmin){ await cloudSaveNow(); }   // establish the shared file so viewers can read
+    if(!got && isAdmin){ await cloudSaveNow(); }
   }catch(e){
     setCloudStatus("error");
     toast("Could not load from SharePoint: "+(e.message||e),"err");
   }
 }
 
-/* write all state to the shared JSON file now (also refresh the human-facing calendar list) */
-let _cloudBusy=false, _cloudPending=false;
+/* upsert one key -> JSON into a list item (DataJson column) */
+async function cloudUpsert(siteId, listId, key, obj){
+  const json=JSON.stringify(obj);
+  const existingId=_dataItemIndex[key];
+  if(existingId){
+    const r=await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+existingId+"/fields","PATCH",{[DATA_COL]:json});
+    if(!r.ok) throw new Error("Could not update '"+key+"' ("+r.status+"). Check write access & the '"+DATA_COL+"' column.");
+    return;
+  }
+  const created=await graph("/sites/"+siteId+"/lists/"+listId+"/items",{method:"POST",body:JSON.stringify({ fields:{ Title:key, [DATA_COL]:json } })});
+  if(created && created.id) _dataItemIndex[key]=created.id;
+}
+
+/* write all state to the data list (also refresh the human-facing calendar list) */
 async function cloudSaveNow(){
   if(!signedIn || !isAdmin) return false;
   if(_cloudBusy){ _cloudPending=true; return false; }
   _cloudBusy=true; setCloudStatus("saving");
   let ok=false;
   try{
-    const state={
-      members: members.map(m=>({id:m.id,name:m.name,email:m.email||""})),
-      scheduleStore, assignStore, vlByDate,
-      savedAt: new Date().toISOString(),
-      savedBy: currentUserEmail
-    };
-    await drivePutJson(DATA_FILE, state);
-    // also mirror current-month assignments into the readable Onboarding Activation Schedule calendar
+    const siteId=await getSiteId();
+    const listId=await getDataListId();
+    if(!listId){ setCloudStatus("error"); toast(DATA_SETUP_MSG,"err"); return false; }
+    await cloudUpsert(siteId, listId, "members",       members.map(m=>({id:m.id,name:m.name,email:m.email||""})));
+    await cloudUpsert(siteId, listId, "scheduleStore", scheduleStore);
+    await cloudUpsert(siteId, listId, "assignStore",   assignStore);
+    await cloudUpsert(siteId, listId, "vlByDate",       vlByDate);
     try{ await syncToSharePoint(true); }catch(e){ console.warn("[calendar sync skipped]", e.message); }
     setCloudStatus("saved");
     ok=true;
