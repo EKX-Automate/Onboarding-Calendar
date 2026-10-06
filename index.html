@@ -98,6 +98,7 @@
 
   .hidden{display:none !important;}
   .note{font-size:11.5px;color:#6a7482;padding:6px 18px;}
+  .signin-banner{background:#fff4d6;border:1px solid #f0dca0;color:#7a5c12;border-radius:10px;padding:10px 16px;margin-bottom:14px;font-size:13px;}
 
   /* settings modal */
   .overlay{position:fixed;inset:0;background:rgba(0,20,74,.35);z-index:10001;display:flex;align-items:center;justify-content:center;}
@@ -145,6 +146,10 @@
       <button class="btn" id="signInBtn" disabled>Initializing...</button>
       <button class="btn ghost small hidden" id="signOutBtn">Sign out</button>
     </div>
+  </div>
+
+  <div id="signinBanner" class="signin-banner hidden">
+    You're viewing local data only. <b>Sign in with your SAP account</b> to load the shared schedule &amp; assignments from SharePoint.
   </div>
 
   <!-- SETTINGS MODAL -->
@@ -882,6 +887,7 @@ function updateRoleBadge(){
   else if(signedIn && !isAdmin){ b.className="badge view"; b.textContent="Viewer (read-only)"; }
   else { b.className="badge admin"; b.textContent="Local edit mode \u2014 sign in to sync"; }
   document.getElementById("resetSchedBtn").style.display = canEdit() ? "" : "none";
+  const bn=document.getElementById("signinBanner"); if(bn) bn.classList.toggle("hidden", signedIn);
 }
 function applyRole(){
   updateRoleBadge();
@@ -993,26 +999,41 @@ msalReady.then(async (instance)=>{
    ============================================================ */
 async function graph(path, opts){
   const token=await getToken();
+  const method=(opts&&opts.method)||"GET";
   const r=await fetch(GRAPH+path, Object.assign({}, opts, {
     headers: Object.assign({ "Authorization":"Bearer "+token, "Content-Type":"application/json" }, (opts&&opts.headers)||{})
   }));
-  if(!r.ok){ throw new Error("Graph "+r.status+": "+(await r.text()).slice(0,180)); }
+  if(!r.ok){
+    const bodyText = await r.text().catch(()=> "");
+    let detail = bodyText;
+    try{ const j=JSON.parse(bodyText); if(j && j.error) detail = j.error.code+": "+j.error.message; }catch(_){}
+    const err=new Error("Graph "+method+" "+r.status+" @ "+path+" — "+(detail||"").slice(0,300));
+    err.status=r.status;
+    console.error("[Graph error]", method, path, r.status, bodyText);
+    throw err;
+  }
   return r.status===204 ? null : r.json();
 }
-/* like graph() but returns {ok,status} instead of throwing (for conditional upsert retries) */
+/* like graph() but returns {ok,status,detail} instead of throwing (for conditional upsert/delete) */
 async function graphRaw(path, method, bodyObj){
   const token=await getToken();
   const init={ method, headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" } };
   if(bodyObj!==undefined) init.body=JSON.stringify(bodyObj);
   const r=await fetch(GRAPH+path, init);
-  return { ok:r.ok, status:r.status };
+  let detail="";
+  if(!r.ok){ detail=await r.text().catch(()=> ""); console.error("[Graph error]", method, path, r.status, detail); }
+  return { ok:r.ok, status:r.status, detail };
 }
 let _siteId=null;
 async function getSiteId(){ if(_siteId) return _siteId; const s=await graph("/sites/"+SITE_PATH); _siteId=s.id; return _siteId; }
 async function findList(title){
   const siteId=await getSiteId();
   const r=await graph("/sites/"+siteId+"/lists?$select=id,displayName,name&$top=200");
-  return (r.value||[]).find(l=>l.displayName===title || l.name===title);
+  const lists=r.value||[];
+  findList._lastNames=lists.map(l=>l.displayName).filter(Boolean);
+  const want=(title||"").trim().toLowerCase();
+  return lists.find(l=>(l.displayName||"").trim().toLowerCase()===want || (l.name||"").trim().toLowerCase()===want)
+      || lists.find(l=>(l.displayName||"").trim().toLowerCase().indexOf(want)>=0);  // contains fallback
 }
 
 /* field-name candidates (SharePoint internal names vary) */
@@ -1100,15 +1121,28 @@ async function ensureDataList(){
   return _dataListId;
 }
 
-/* read all app state from SharePoint into the in-memory stores */
+/* read all app state from SharePoint into the in-memory stores (read-only for viewers) */
 async function cloudLoadAll(){
   setCloudStatus("loading");
   try{
     const siteId=await getSiteId();
-    const listId=await ensureDataList();
+    // resolve the data list WITHOUT provisioning (viewers can't create lists/columns)
+    let listId=_dataListId;
+    if(!listId){
+      const list=await findList(DATA_LIST);
+      if(list){ listId=list.id; _dataListId=listId; }
+    }
+    if(!listId){
+      if(isAdmin){ listId=await ensureDataList(); }   // only the admin provisions it
+      else{
+        setCloudStatus("error");
+        toast("No shared data found yet. Ask the admin to open the dashboard and save once.","err");
+        return;
+      }
+    }
     const r=await graph("/sites/"+siteId+"/lists/"+listId+"/items?expand=fields&$top=50");
     _dataItemIndex={};
-    let got=false;
+    let got=false, cloudMembers=null;
     (r.value||[]).forEach(it=>{
       const f=it.fields||{}; const key=f.Title; if(!key) return;
       _dataItemIndex[key]=it.id;
@@ -1117,20 +1151,29 @@ async function cloudLoadAll(){
       if(key==="scheduleStore"){ scheduleStore=val; got=true; }
       else if(key==="assignStore"){ assignStore=val; got=true; }
       else if(key==="vlByDate"){ vlByDate=val; got=true; }
+      else if(key==="members"){ cloudMembers=val; }
     });
+    // If we only have placeholder members (e.g. a viewer who can't read the Masterlist),
+    // use the roster saved in the shared list so names/assignments resolve correctly.
+    const onlyPlaceholders = members.every(m=>String(m.id).startsWith("ph"));
+    if(cloudMembers && cloudMembers.length && onlyPlaceholders){
+      members = cloudMembers.map(m=>({id:m.id,name:m.name,email:m.email||""}));
+    }
     // mirror to local cache + re-point current month
     lsSet("csr_schedule_m",scheduleStore); lsSet("csr_assign",assignStore); lsSet("csr_vl",vlByDate);
     loadMonthSchedule();
     renderAll();
-    setCloudStatus("saved");
-    toast(got ? "Loaded dashboard data from SharePoint." : "SharePoint store ready (empty) — your data will save here.","ok");
+    setCloudStatus(got ? "saved" : "local");
+    if(got) toast("Loaded dashboard data from SharePoint.","ok");
+    else if(isAdmin) toast("SharePoint store ready (empty) — your data will save here.","ok");
+    else toast("No shared data saved yet by the admin.","err");
     // if cloud was empty but we have local data and we're admin, push it up as the initial migration
     if(!got && isAdmin && (Object.keys(scheduleStore).length || Object.keys(assignStore).length || Object.keys(vlByDate).length)){
       await cloudSaveNow();
     }
   }catch(e){
     setCloudStatus("error");
-    toast("Could not load from SharePoint (using local copy): "+e.message,"err");
+    toast("Could not load from SharePoint: "+(e.message||e),"err");
   }
 }
 
@@ -1158,6 +1201,7 @@ async function cloudSaveNow(){
   try{
     const siteId=await getSiteId();
     const listId=await ensureDataList();
+    await cloudUpsert(siteId, listId, "members",       members.map(m=>({id:m.id,name:m.name,email:m.email||""})));
     await cloudUpsert(siteId, listId, "scheduleStore", scheduleStore);
     await cloudUpsert(siteId, listId, "assignStore",   assignStore);
     await cloudUpsert(siteId, listId, "vlByDate",       vlByDate);
@@ -1191,7 +1235,10 @@ let _syncListId = null;
 async function getSyncListId(){
   if(_syncListId) return _syncListId;
   const list = await findList(SYNC_LIST);
-  if(!list) throw new Error("List '"+SYNC_LIST+"' not found");
+  if(!list){
+    const names=(findList._lastNames||[]).slice(0,25).join(", ");
+    throw new Error("List '"+SYNC_LIST+"' not found. Available lists: "+(names||"(none returned)"));
+  }
   _syncListId = list.id;
   return _syncListId;
 }
@@ -1245,7 +1292,7 @@ async function syncToSharePoint(silent){
     }
 
     if(!silent) toast("Synced to '"+SYNC_LIST+"' — "+created+" new, "+updated+" updated, "+removed+" removed"+(failed?(", "+failed+" failed"):""),"ok");
-  }catch(e){ if(!silent) toast("Sync failed: "+e.message,"err"); }
+  }catch(e){ console.error("[Sync failed]", e); if(!silent) toast("Sync failed: "+(e.message||e),"err"); }
 }
 
 /* ============================================================
