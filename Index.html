@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CSR II Activation Calendar Report</title>
+<meta http-equiv="Content-Security-Policy" content="connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com https://login.windows.net https://cdn.jsdelivr.net https://unpkg.com https://alcdn.msauth.net; frame-src 'self' https://login.microsoftonline.com https://login.windows.net; img-src 'self' data: https://graph.microsoft.com" />
+<style>
+  :root{
+    --navy:#002A86; --deep-navy:#00144A; --sap-blue:#1B90FF; --link-blue:#0070F2;
+    --light-sky:#D1EFFF; --light-blue:#89D1FF; --gray:#666666; --mgray:#999999;
+    --lgray:#EAECEE; --white:#FFFFFF;
+    --sun:#DDEEF6; --mon:#DEE8C8; --tue:#FBE6D4; --wed:#DEE8C8; --thu:#FBE6D4;
+    --fri:#F3DEDE; --sat:#C3D694; --empty:#ECECEC;
+    --namew:200px;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:#F3F5F7;color:#1a1a1a;
+    font-family:"72","72override",Arial,Helvetica,sans-serif;font-size:13px;}
+  .wrap{max-width:1600px;margin:0 auto;padding:14px;}
+
+  /* top bar */
+  .topbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+  .tabs{display:flex;gap:8px;}
+  .tab{background:var(--white);border:1px solid #cfd8e3;border-radius:8px;padding:9px 20px;
+    font-weight:700;cursor:pointer;color:#223;box-shadow:0 1px 2px rgba(0,0,0,.06);}
+  .tab.active{background:var(--sap-blue);color:#fff;border-color:var(--sap-blue);}
+  .spacer{flex:1;}
+  .userbox{display:flex;align-items:center;gap:8px;font-size:12px;color:#334;}
+  .badge{background:var(--light-sky);color:var(--navy);border-radius:12px;padding:3px 10px;font-weight:700;}
+  .badge.admin{background:#d7f3dd;color:#13703a;}
+  .badge.view{background:#fde7e7;color:#9b2222;}
+  button.btn{background:var(--sap-blue);color:#fff;border:none;border-radius:8px;padding:9px 16px;
+    font-weight:700;cursor:pointer;font-size:12px;}
+  button.btn:hover{background:#0f7ae0;}
+  button.btn.ghost{background:#fff;color:var(--link-blue);border:1px solid var(--sap-blue);}
+  button.btn:disabled{background:#b9c6d6;cursor:not-allowed;}
+  button.btn.small{padding:6px 12px;}
+
+  .card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.07);
+    padding:0;margin-bottom:16px;overflow:hidden;}
+  .card .pad{padding:16px 18px;}
+  .card-title{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .card-title h2{margin:0;font-size:17px;color:var(--deep-navy);}
+
+  .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  select,input[type=text]{font-family:inherit;font-size:12px;padding:6px 8px;border:1px solid #c3ccd8;border-radius:6px;background:#fff;}
+
+  /* section header blue */
+  .sechead{background:var(--light-sky);color:var(--deep-navy);font-weight:800;font-size:14px;
+    padding:9px 14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;
+    border-top:1px solid #cfe3f6;}
+  .sechead .arrow{transition:transform .2s;font-size:12px;}
+  .sechead.collapsed .arrow{transform:rotate(-90deg);}
+
+  /* weekly schedule table */
+  table{border-collapse:collapse;width:100%;}
+  .sched{font-size:12px;table-layout:fixed;}
+  .sched col.spacer{width:var(--namew);}
+  .sched th,.sched td{border:1px solid #d7dde6;padding:0;text-align:center;}
+  .sched thead th{background:var(--navy);color:#fff;padding:9px 6px;font-weight:700;}
+  .sched td.name,.sched th.name{background:#eaf4ff;color:var(--deep-navy);font-weight:700;
+    text-align:left;padding:7px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .sched tbody tr:nth-child(even) td.name{background:#e2eefb;}
+  .sched select.shift{border:none;background:transparent;width:100%;padding:7px 2px;font-size:11.5px;
+    font-weight:600;text-align:center;text-align-last:center;cursor:pointer;appearance:none;}
+  .sched select.shift.on{color:var(--link-blue);}
+  .sched select.shift.off{color:#9aa3ad;}
+  .sched td.cell.focused{outline:2px solid var(--sap-blue);outline-offset:-2px;}
+
+  /* calendar grid */
+  .calbar{background:var(--deep-navy);text-align:center;padding:7px;color:#ff5d5d;font-weight:800;font-size:15px;letter-spacing:.3px;}
+  .cal{table-layout:fixed;}
+  .cal col.spacer{width:var(--namew);}
+  .cal td.spacer,.cal th.spacer{border:none;background:#fff;padding:0;}
+  .cal th.calbar{background:var(--deep-navy);text-align:center;padding:7px;color:#ff5d5d;font-weight:800;font-size:15px;letter-spacing:.3px;border:1px solid #0b1f52;}
+  .cal th.dow{background:var(--navy);color:#fff;padding:8px 4px;font-weight:800;font-size:12.5px;border:1px solid #0b1f52;}
+  .cal th.dow .pool{display:block;font-weight:600;font-size:9.5px;color:#bcd2ff;font-style:italic;margin-top:3px;line-height:1.25;min-height:12px;}
+  .cal td{border:1px solid #c9d2dd;vertical-align:top;height:96px;padding:5px 6px;position:relative;}
+  .cal td.sun{background:var(--sun);} .cal td.mon{background:var(--mon);}
+  .cal td.tue{background:var(--tue);} .cal td.wed{background:var(--wed);}
+  .cal td.thu{background:var(--thu);} .cal td.fri{background:var(--fri);}
+  .cal td.sat{background:var(--sat);} .cal td.empty{background:var(--empty);}
+  .cal td .dnum{font-weight:800;font-size:14px;color:#13203a;}
+  .cal td.today{outline:3px solid var(--sap-blue);outline-offset:-3px;}
+  .cal td.todaycol{box-shadow:inset 0 0 0 9999px rgba(27,144,255,.06);}
+  .assign{margin-top:4px;font-size:11.5px;color:#13203a;font-weight:700;line-height:1.25;}
+  .assign .sf{display:block;font-weight:500;color:#5b6676;font-size:10.5px;margin-top:1px;}
+  .cal td select.assignsel,.cal td select.vlsel{width:100%;margin-top:4px;font-size:11px;padding:3px;border:1px solid #c7cfdb;border-radius:5px;background:rgba(255,255,255,.7);}
+  .vlname{display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid #f0c9c9;color:#b5321f;
+    font-weight:700;font-size:11px;border-radius:5px;padding:2px 6px;margin-top:3px;}
+  .vlname button{border:none;background:transparent;color:#b5321f;cursor:pointer;font-weight:800;padding:0 2px;}
+
+  /* stats */
+  .stats{display:flex;gap:22px;align-items:center;flex-wrap:wrap;background:#f6f8fb;border-top:1px solid #e3e9f0;border-bottom:1px solid #e3e9f0;padding:10px 18px;font-size:12.5px;}
+  .stats b{color:var(--deep-navy);} .stats .v{color:#c0392b;font-weight:800;}
+  .stats .hint{margin-left:auto;color:#8a95a3;font-style:italic;}
+
+  .hidden{display:none !important;}
+  .note{font-size:11.5px;color:#6a7482;padding:6px 18px;}
+
+  /* shift cell context menu */
+  #cellMenu{position:fixed;z-index:10000;background:#fff;border:1px solid #c3ccd8;border-radius:8px;
+    box-shadow:0 8px 24px rgba(0,0,0,.18);padding:5px;min-width:200px;display:none;}
+  #cellMenu .mhdr{padding:5px 12px 7px;color:#8a95a3;font-size:11px;font-weight:700;}
+  #cellMenu button{display:block;width:100%;text-align:left;background:none;border:none;padding:8px 12px;
+    border-radius:6px;cursor:pointer;color:#1a2b4a;font-family:inherit;font-size:12.5px;}
+  #cellMenu button:hover{background:var(--light-sky);}
+  #cellMenu button:disabled{color:#b7c0cc;cursor:not-allowed;background:none;}
+  #cellMenu .sep{height:1px;background:#e5e9f0;margin:4px 2px;}
+
+  /* toast */
+  #toast{position:fixed;right:18px;bottom:18px;max-width:360px;z-index:9999;display:flex;flex-direction:column;gap:8px;}
+  .toastmsg{background:#23324e;color:#fff;padding:11px 14px;border-radius:8px;font-size:12.5px;box-shadow:0 4px 14px rgba(0,0,0,.25);}
+  .toastmsg.ok{background:#176b3a;} .toastmsg.err{background:#8a2020;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="tabs">
+      <button class="tab active" id="tabReport">Calendar Report</button>
+      <button class="tab" id="tabVL">VL/OOO</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="userbox">
+      <span id="roleBadge" class="badge view">Viewer (read-only)</span>
+      <span id="whoami"></span>
+      <button class="btn" id="signInBtn" disabled>Initializing...</button>
+      <button class="btn ghost small hidden" id="signOutBtn">Sign out</button>
+    </div>
+  </div>
+
+  <!-- ======================= CALENDAR REPORT TAB ======================= -->
+  <div id="viewReport">
+    <div class="card">
+      <div class="pad card-title">
+        <h2 id="reportTitle">October 2026 &mdash; For ACTIVATION Only</h2>
+        <div class="controls">
+          <select id="monthSel"></select>
+          <select id="yearSel"></select>
+          <button class="btn ghost small" id="todayBtn">Today</button>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn" id="autoBtn">Auto-Assign Schedule</button>
+        <button class="btn ghost small" id="syncBtn">Sync to SharePoint</button>
+      </div>
+
+      <!-- Weekly schedule -->
+      <div class="sechead" id="schedHead">
+        <span>CSR II Weekly Schedule</span>
+        <span style="display:flex;align-items:center;gap:10px;">
+          <button class="btn ghost small" id="resetSchedBtn" style="display:none;">Reset shifts to OFF (this month)</button>
+          <span class="arrow">&#9660;</span>
+        </span>
+      </div>
+      <div id="schedBody">
+        <div style="overflow-x:auto;">
+          <table class="sched" id="schedTable"></table>
+        </div>
+        <div class="note">Tip: <b>right-click</b> any shift cell to Copy / Paste a time (or paste to a whole row, column, or everyone). Keyboard <b>Ctrl+C</b> / <b>Ctrl+V</b> / <b>Ctrl+X</b> also work. Default shift is <b>OFF</b>. Blue = active shift, gray = OFF.</div>
+      </div>
+
+      <!-- Activation calendar (banner + grid built inside the table so day columns
+           align with the weekly schedule above via a left spacer column) -->
+      <div style="overflow-x:auto;">
+        <table class="cal" id="activationCal"></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= VACATION LEAVE TAB ======================= -->
+  <div id="viewVL" class="hidden">
+    <div class="card">
+      <div class="pad card-title">
+        <h2 id="vlTitle">VL/OOO &mdash; October 2026</h2>
+      </div>
+      <div class="stats">
+        <span><b>Month:</b> <span class="v" id="vlMonthLbl">October 2026</span></span>
+        <span><b>Total VL/OOO Days:</b> <span class="v" id="vlTotal">0</span></span>
+        <span><b>Members on VL/OOO:</b> <span class="v" id="vlMembers">0 / 0</span></span>
+        <span class="hint">Use the dropdown in each cell to assign VL/OOO</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="cal" id="vlCal"></table>
+      </div>
+    </div>
+  </div>
+
+</div>
+<div id="cellMenu"></div>
+<div id="toast"></div>
+
+<script>
+/* ============================================================
+   CSR II ACTIVATION CALENDAR REPORT  (standalone, client-side)
+   ============================================================ */
+
+/* ---------- Admin ---------- */
+const ADMIN_EMAIL = "ma.theresa.cassandra.choy@sap.com";
+
+/* ---------- SharePoint / Graph config ---------- */
+const SITE_PATH   = "sap.sharepoint.com:/sites/214668";
+const MASTERLIST  = "USD Manila - Masterlist";
+const SYNC_LIST   = "Onboarding Activation Schedule";
+const GRAPH       = "https://graph.microsoft.com/v1.0";
+const SCOPES      = ["User.Read", "Sites.ReadWrite.All"];
+
+/* ---------- MSAL config ---------- */
+const msalConfig = {
+  auth: {
+    clientId: "0965a0ca-c6be-45e4-a1f0-0bf0f7cca86e",
+    authority: "https://login.microsoftonline.com/42f7676c-f455-423c-82f6-dc2d99791af7",
+    redirectUri: "https://static.ekx.cloud.sap"
+  },
+  cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
+};
+
+/* ====== RULE 1 : dynamic MSAL loader with 3-CDN fallback ====== */
+const MSAL_CDNS = [
+  "https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.39.0/lib/msal-browser.min.js",
+  "https://unpkg.com/@azure/msal-browser@2.39.0/lib/msal-browser.min.js",
+  "https://alcdn.msauth.net/browser/2.39.0/js/msal-browser.min.js"
+];
+function loadMsalScript() {
+  return new Promise((resolve, reject) => {
+    if (window.msal) { resolve(); return; }
+    let i = 0;
+    const tryNext = () => {
+      if (window.msal) { resolve(); return; }
+      if (i >= MSAL_CDNS.length) { reject(new Error("Could not load MSAL from any CDN")); return; }
+      const url = MSAL_CDNS[i++];
+      const s = document.createElement("script");
+      s.src = url; s.async = true;
+      s.onload = () => { window.msal ? resolve() : tryNext(); };
+      s.onerror = () => tryNext();
+      document.head.appendChild(s);
+    };
+    tryNext();
+  });
+}
+
+/* ====== RULE 2 : single init promise ====== */
+const msalReady = (async () => {
+  await loadMsalScript();
+  const instance = new msal.PublicClientApplication(msalConfig);
+  await instance.initialize();
+  return instance;
+})();
+
+/* ---------- state ---------- */
+const WEEKDAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DOW_FULL = ["SUNDAY","MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY"];
+const DOW_CLASS = ["sun","mon","tue","wed","thu","fri","sat"];
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+/* placeholder members (shown until signed in) */
+const PLACEHOLDER_MEMBERS = [
+  "Mynard Buletche","Jhoe Caracas","Dezhneva Demicais","Ryan Legaspi","Marah Adriano",
+  "Germaine Joyce Melencio","Paula Morales","David Edward Perez","Jerald Paul Santos",
+  "Clarissa Silvestre","Jhoy Tagnia"
+].map((n,i)=>({ id:"ph"+i, name:n, email:"" }));
+
+let members = PLACEHOLDER_MEMBERS.slice();
+let isAdmin = false;
+let signedIn = false;
+let currentUserEmail = "";
+
+let cur = new Date(2026, 9, 1); // default Oct 2026 to match sample; replaced by Today on load if desired
+let viewYear = cur.getFullYear();
+let viewMonth = cur.getMonth();
+
+const TODAY = new Date();
+
+/* generate 48 continuous 9-hour shift ranges at 30-minute intervals + OFF */
+function fmt12m(mins){
+  mins = ((mins % 1440) + 1440) % 1440;
+  let h = Math.floor(mins/60), m = mins % 60;
+  const ap = h<12 ? "AM" : "PM";
+  let hr = h%12; if(hr===0) hr=12;
+  return hr+":"+String(m).padStart(2,"0")+" "+ap;
+}
+const SHIFTS = ["OFF"];
+for(let i=0; i<48; i++){ const start=i*30; SHIFTS.push(fmt12m(start)+" - "+fmt12m(start+540)); } // +540 min = 9 hours
+
+/* ---------- persistence ---------- */
+function lsGet(k, def){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):def; }catch(e){ return def; } }
+function lsSet(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+
+/* One-time migration: older builds seeded a working schedule into localStorage.
+   Bumping the version clears that stale schedule so OFF is the real default. */
+const SCHEDULE_VERSION = "2";
+if(localStorage.getItem("csr_schedule_ver") !== SCHEDULE_VERSION){
+  try{ localStorage.removeItem("csr_schedule"); }catch(e){}
+  try{ localStorage.setItem("csr_schedule_ver", SCHEDULE_VERSION); }catch(e){}
+}
+
+// schedule is MONTH-SCOPED: { "YYYY-M": { memberId: [sun..sat] } } default OFF.
+// `schedule` always points at the currently-selected month's object.
+let scheduleStore = lsGet("csr_schedule_m", {});
+let schedule = {};
+// assignments per month: { "YYYY-M": { dateKey:{memberId,source} } }
+let assignStore = lsGet("csr_assign", {});
+// vl by date: { dateKey:[memberId,...] }
+let vlByDate = lsGet("csr_vl", {});
+
+function monthKey(){ return viewYear+"-"+viewMonth; }
+function dateKey(y,m,d){ return y+"-"+String(m+1).padStart(2,"0")+"-"+String(d).padStart(2,"0"); }
+function assignMap(){ if(!assignStore[monthKey()]) assignStore[monthKey()]={}; return assignStore[monthKey()]; }
+
+// point `schedule` at the selected month's schedule (creating it if needed)
+function loadMonthSchedule(){
+  const k=monthKey();
+  if(!scheduleStore[k]) scheduleStore[k]={};
+  schedule = scheduleStore[k];
+  ensureSchedule();
+}
+function ensureSchedule(){
+  members.forEach(mem=>{
+    if(!schedule[mem.id]) schedule[mem.id] = ["OFF","OFF","OFF","OFF","OFF","OFF","OFF"];
+  });
+}
+function saveAll(){ lsSet("csr_schedule_m",scheduleStore); lsSet("csr_assign",assignStore); lsSet("csr_vl",vlByDate); }
+
+/* ---------- helpers ---------- */
+function firstName(name){ return (name||"").trim().split(/\s+/)[0] || name; }
+function memberById(id){ return members.find(m=>m.id===id); }
+function toast(msg, type){
+  const d=document.createElement("div");
+  d.className="toastmsg"+(type?(" "+type):"");
+  d.textContent=msg;
+  document.getElementById("toast").appendChild(d);
+  setTimeout(()=>{ d.style.opacity="0"; d.style.transition="opacity .4s"; setTimeout(()=>d.remove(),400); }, 4200);
+}
+/* Editing is allowed for the admin, and locally before anyone has signed in
+   (exploration / offline use). A signed-in NON-admin is strictly read-only.
+   Writing to SharePoint (Sync) stays admin-only regardless. */
+function canEdit(){ return isAdmin || !signedIn; }
+
+/* previous day weekday name for a given date */
+function prevDayName(y,m,d){
+  const dt=new Date(y,m,d); dt.setDate(dt.getDate()-1);
+  return DOW_FULL[dt.getDay()].charAt(0)+DOW_FULL[dt.getDay()].slice(1).toLowerCase();
+}
+function isToday(y,m,d){ return y===TODAY.getFullYear()&&m===TODAY.getMonth()&&d===TODAY.getDate(); }
+
+/* who is working a given weekday (0..6), not OFF, not on VL for that date */
+function working(memId, dow){ const s=schedule[memId]; return s && s[dow] && s[dow]!=="OFF"; }
+function onVL(memId, dKey){ return (vlByDate[dKey]||[]).includes(memId); }
+
+/* ============================================================
+   RENDER : WEEKLY SCHEDULE
+   ============================================================ */
+function renderSchedule(){
+  ensureSchedule();
+  const t=document.getElementById("schedTable");
+  let h="<colgroup><col class='spacer'>"+"<col>".repeat(7)+"</colgroup>";
+  h+="<thead><tr><th class='name'>CSR II</th>";
+  WEEKDAYS.forEach(d=>h+="<th>"+d+"</th>");
+  h+="</tr></thead><tbody>";
+  members.forEach(mem=>{
+    h+="<tr><td class='name'>"+escapeHtml(mem.name)+"</td>";
+    for(let dow=0;dow<7;dow++){
+      const val=schedule[mem.id][dow];
+      h+="<td class='cell' data-mem='"+mem.id+"' data-dow='"+dow+"'>"
+        +"<select class='shift "+(val==="OFF"?"off":"on")+"' data-mem='"+mem.id+"' data-dow='"+dow+"'"+(canEdit()?"":" disabled")+">"
+        +SHIFTS.map(s=>"<option"+(s===val?" selected":"")+">"+s+"</option>").join("")
+        +"</select></td>";
+    }
+    h+="</tr>";
+  });
+  h+="</tbody>";
+  t.innerHTML=h;
+
+  t.querySelectorAll("select.shift").forEach(sel=>{
+    sel.addEventListener("change", e=>{
+      const mem=e.target.getAttribute("data-mem"), dow=+e.target.getAttribute("data-dow");
+      schedule[mem][dow]=e.target.value;
+      e.target.className="shift "+(e.target.value==="OFF"?"off":"on");
+      saveAll();
+    });
+    sel.addEventListener("focus", e=>{ e.target.closest("td").classList.add("focused"); });
+    sel.addEventListener("blur",  e=>{ e.target.closest("td").classList.remove("focused"); });
+  });
+}
+
+/* copy / paste support on shift cells.
+   <select> elements don't fire native copy/paste events (no text selection),
+   so we intercept Ctrl/Cmd + C / X / V via keydown and keep an internal clipboard. */
+let shiftClipboard = null;
+
+function applyShiftToSelect(el, v){
+  if(!(v && SHIFTS.includes(v))) return false;
+  el.value = v;
+  el.className = "shift " + (v==="OFF" ? "off" : "on");
+  schedule[el.getAttribute("data-mem")][+el.getAttribute("data-dow")] = v;
+  saveAll();
+  return true;
+}
+
+document.addEventListener("keydown", e=>{
+  const el = document.activeElement;
+  if(!(el && el.classList && el.classList.contains("shift"))) return;
+  const ctrl = e.ctrlKey || e.metaKey;
+  if(!ctrl) return;
+  const key = (e.key || "").toLowerCase();
+
+  if(key === "c" || key === "x"){                      // copy / cut
+    shiftClipboard = el.value;
+    try{ if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(el.value); }catch(_){}
+    if(key === "x"){
+      if(!canEdit()){ toast("Only the admin can edit the schedule.","err"); e.preventDefault(); return; }
+      applyShiftToSelect(el, "OFF");
+    }
+    e.preventDefault();
+    toast((key==="x"?"Cut":"Copied")+" shift: "+shiftClipboard);
+  }
+  else if(key === "v"){                                 // paste
+    if(!canEdit()){ toast("Only the admin can edit the schedule.","err"); e.preventDefault(); return; }
+    e.preventDefault();
+    if(applyShiftToSelect(el, shiftClipboard)){
+      toast("Pasted shift: "+shiftClipboard);
+    }else{
+      // fall back to the OS clipboard (async)
+      if(navigator.clipboard && navigator.clipboard.readText){
+        navigator.clipboard.readText().then(t=>{
+          const v=(t||"").trim();
+          if(applyShiftToSelect(el, v)) toast("Pasted shift: "+v);
+          else toast("Nothing to paste. Copy a shift with Ctrl+C first.","err");
+        }).catch(()=>toast("Nothing to paste. Copy a shift with Ctrl+C first.","err"));
+      }else{
+        toast("Nothing to paste. Copy a shift with Ctrl+C first.","err");
+      }
+    }
+  }
+});
+
+/* right-click context menu on shift cells (robust across browsers) */
+let menuCell = null;
+function hideCellMenu(){ const m=document.getElementById("cellMenu"); if(m) m.style.display="none"; }
+function buildCellMenu(){
+  const m=document.getElementById("cellMenu");
+  const mem=menuCell?memberById(menuCell.mem):null;
+  const canPaste = canEdit() && shiftClipboard!=null;
+  const clip = shiftClipboard!=null ? (" ("+shiftClipboard+")") : "";
+  m.innerHTML =
+    "<div class='mhdr'>"+(mem?escapeHtml(firstName(mem.name)):"")+" &middot; "+(menuCell?WEEKDAYS[menuCell.dow]:"")+"</div>"
+    +"<button data-act='copy'>Copy time</button>"
+    +"<button data-act='paste'"+(canPaste?"":" disabled")+">Paste"+clip+"</button>"
+    +"<div class='sep'></div>"
+    +"<button data-act='prow'"+(canPaste?"":" disabled")+">Paste to whole row (this person)</button>"
+    +"<button data-act='pcol'"+(canPaste?"":" disabled")+">Paste to whole column (this day)</button>"
+    +"<button data-act='pall'"+(canPaste?"":" disabled")+">Paste to everyone</button>"
+    +"<div class='sep'></div>"
+    +"<button data-act='off'"+(canEdit()?"":" disabled")+">Set OFF</button>";
+}
+document.getElementById("schedTable").addEventListener("contextmenu", e=>{
+  const td=e.target.closest("td.cell");
+  if(!td) return;
+  e.preventDefault();
+  menuCell={ mem:td.getAttribute("data-mem"), dow:+td.getAttribute("data-dow"), el:td.querySelector("select.shift") };
+  buildCellMenu();
+  const m=document.getElementById("cellMenu");
+  m.style.display="block";
+  const mw=m.offsetWidth||210, mh=m.offsetHeight||260;
+  let x=e.clientX, y=e.clientY;
+  if(x+mw>window.innerWidth)  x=Math.max(6, window.innerWidth-mw-6);
+  if(y+mh>window.innerHeight) y=Math.max(6, window.innerHeight-mh-6);
+  m.style.left=x+"px"; m.style.top=y+"px";
+});
+document.getElementById("cellMenu").addEventListener("click", e=>{
+  const b=e.target.closest("button"); if(!b || !menuCell) return;
+  const act=b.getAttribute("data-act");
+  const mem=menuCell.mem, dow=menuCell.dow, el=menuCell.el;
+  if(act==="copy"){
+    shiftClipboard = el ? el.value : schedule[mem][dow];
+    try{ if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(shiftClipboard); }catch(_){}
+    toast("Copied shift: "+shiftClipboard);
+  } else if(!canEdit()){
+    toast("Only the admin can edit the schedule.","err");
+  } else if(act==="paste"){
+    if(shiftClipboard && el){ applyShiftToSelect(el, shiftClipboard); toast("Pasted shift: "+shiftClipboard); }
+  } else if(act==="off"){
+    if(el) applyShiftToSelect(el, "OFF");
+  } else if(act==="prow" && shiftClipboard){
+    for(let d=0; d<7; d++) schedule[mem][d]=shiftClipboard; saveAll(); renderSchedule(); renderActivation(); toast("Row filled with "+shiftClipboard);
+  } else if(act==="pcol" && shiftClipboard){
+    members.forEach(mm=>{ schedule[mm.id][dow]=shiftClipboard; }); saveAll(); renderSchedule(); renderActivation(); toast("Column filled with "+shiftClipboard);
+  } else if(act==="pall" && shiftClipboard){
+    members.forEach(mm=>{ for(let d=0;d<7;d++) schedule[mm.id][d]=shiftClipboard; }); saveAll(); renderSchedule(); renderActivation(); toast("Applied "+shiftClipboard+" to everyone");
+  }
+  hideCellMenu();
+});
+document.addEventListener("click", e=>{ if(!e.target.closest("#cellMenu")) hideCellMenu(); });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") hideCellMenu(); });
+window.addEventListener("scroll", hideCellMenu, true);
+
+/* ============================================================
+   RENDER : ACTIVATION CALENDAR
+   ============================================================ */
+function buildCalendarSkeleton(firstDow, daysInMonth){
+  const cells=[];
+  for(let i=0;i<firstDow;i++) cells.push(null);
+  for(let d=1;d<=daysInMonth;d++) cells.push(d);
+  while(cells.length%7!==0) cells.push(null);
+  return cells;
+}
+
+function renderActivation(){
+  const t=document.getElementById("activationCal");
+  const firstDow=new Date(viewYear,viewMonth,1).getDay();
+  const dim=new Date(viewYear,viewMonth+1,0).getDate();
+  const cells=buildCalendarSkeleton(firstDow,dim);
+  const am=assignMap();
+
+  // colgroup: leading spacer (aligns with the weekly-schedule name column) + 7 day columns
+  let h="<colgroup><col class='spacer'>"+"<col>".repeat(7)+"</colgroup>";
+  // banner + day-name header (both carry a blank leading spacer cell so the 7 day
+  // columns line up exactly beneath the weekly schedule's Sun..Sat columns)
+  h+="<thead>";
+  h+="<tr><td class='spacer'></td><th class='calbar' colspan='7'>**For ACTIVATION Only**</th></tr>";
+  // Each day-of-week column has a FIXED, consistent team of up to 3 agents.
+  // Headers always show that dedicated team (same agents every week for the column).
+  const teams = computeColumnTeams();
+  h+="<tr><td class='spacer'></td>";
+  for(let dow=0;dow<7;dow++){
+    const txt = teams[dow].map(id=>firstName((memberById(id)||{}).name||"")).join(", ");
+    h+="<th class='dow'>"+DOW_FULL[dow]+"<span class='pool'>"+escapeHtml(txt)+"</span></th>";
+  }
+  h+="</tr></thead><tbody>";
+
+  for(let r=0;r<cells.length/7;r++){
+    h+="<tr><td class='spacer'></td>";
+    for(let c=0;c<7;c++){
+      const d=cells[r*7+c];
+      if(d===null){ h+="<td class='empty'></td>"; continue; }
+      const dow=c;
+      const dk=dateKey(viewYear,viewMonth,d);
+      const cls=[DOW_CLASS[dow]];
+      if(isToday(viewYear,viewMonth,d)) cls.push("today");
+      if(dow===TODAY.getDay() && viewYear===TODAY.getFullYear() && viewMonth===TODAY.getMonth()) cls.push("todaycol");
+      h+="<td class='"+cls.join(" ")+"' data-dk='"+dk+"' data-dow='"+dow+"'>";
+      h+="<span class='dnum'>"+d+"</span>";
+
+      const isAssignable = true; // all 7 days assignable (activation runs on weekends too)
+      const rec=am[dk];
+      if(rec){
+        const mem=memberById(rec.memberId);
+        const nm=mem?firstName(mem.name):"(unknown)";
+        h+="<div class='assign'>"+escapeHtml(nm)+" - run "+prevDayName(viewYear,viewMonth,d)+" report"
+          +"<span class='sf'>Add Email to SF</span></div>";
+      }
+      if(isAssignable){
+        // manual assignment dropdown
+        const avail=members.filter(m=>working(m.id,dow)&&!onVL(m.id,dk));
+        let opts="<option value=''>-- assign --</option>";
+        members.forEach(m=>{
+          const can=working(m.id,dow)&&!onVL(m.id,dk);
+          opts+="<option value='"+m.id+"'"+(rec&&rec.memberId===m.id?" selected":"")+(can?"":" disabled")+">"
+            +escapeHtml(firstName(m.name))+(can?"":" (unavail)")+"</option>";
+        });
+        h+="<select class='assignsel' data-dk='"+dk+"'"+(canEdit()?"":" disabled")+">"+opts+"</select>";
+      }
+      h+="</td>";
+    }
+    h+="</tr>";
+  }
+  h+="</tbody>";
+  t.innerHTML=h;
+
+  t.querySelectorAll("select.assignsel").forEach(sel=>{
+    sel.addEventListener("change", e=>{
+      const dk=e.target.getAttribute("data-dk");
+      const v=e.target.value;
+      const m=assignMap();
+      if(v){ m[dk]={memberId:v, source:"manual"}; }
+      else { delete m[dk]; }
+      saveAll(); renderActivation();
+    });
+  });
+}
+
+/* ============================================================
+   COLUMN TEAMS + AUTO-ASSIGN ENGINE
+   Each day-of-week column has a FIXED, consistent team of up to 3 agents
+   (the same trio every week for that column). computeColumnTeams() derives
+   those teams deterministically from the weekly schedule, so headers and the
+   auto-assigner always agree. Auto-assign distributes a column's dates among
+   its own team (load-balanced); it only BORROWS an agent from another column
+   when the team can't cover a date (e.g. all on VL/OOO) -> "additional
+   assignment" overflow. Manual assignments are preserved.
+   ============================================================ */
+const MAX_STAFF_PER_COLUMN = 3;   // fixed team size per day-of-week column (2-3)
+
+function idxOf(id){ return members.findIndex(mm=>mm.id===id); }
+
+function computeColumnTeams(){
+  const teams=[[],[],[],[],[],[],[]];
+  const colCount={}; members.forEach(mm=>colCount[mm.id]=0);  // how many columns each agent is on
+  for(let dow=0; dow<7; dow++){                                // fixed order -> deterministic & stable
+    const avail=members.filter(mm=>working(mm.id,dow)).map(mm=>mm.id);
+    if(avail.length===0) continue;
+    const take=Math.min(MAX_STAFF_PER_COLUMN, avail.length);
+    // pick agents who currently serve the fewest columns (spreads agents evenly), tie-break by order
+    const sorted=avail.slice().sort((a,b)=> (colCount[a]-colCount[b]) || (idxOf(a)-idxOf(b)) );
+    const team=sorted.slice(0,take);
+    team.forEach(id=>colCount[id]++);
+    teams[dow]=team;
+  }
+  return teams;
+}
+
+function autoAssign(){
+  if(!canEdit()){ toast("Only the admin can run auto-assignment.","err"); return; }
+  const dim=new Date(viewYear,viewMonth+1,0).getDate();
+  const m=assignMap();
+  const mPrefix=dateKey(viewYear,viewMonth,1).slice(0,7);
+
+  // running load per agent, seeded from any existing (manual/prior) assignments this month
+  const total={}; members.forEach(mm=>total[mm.id]=0);
+  Object.keys(m).forEach(dk=>{ const r=m[dk]; if(r && dk.slice(0,7)===mPrefix && total[r.memberId]!=null) total[r.memberId]++; });
+
+  const datesByDow=[[],[],[],[],[],[],[]];
+  for(let d=1; d<=dim; d++){ datesByDow[new Date(viewYear,viewMonth,d).getDay()].push(d); }
+
+  const teams=computeColumnTeams();
+  const argminId=(ids)=>{ let best=null,bc=Infinity; ids.forEach(id=>{ if(total[id]<bc){ bc=total[id]; best=id; } }); return best; };
+
+  let assignedCount=0, borrowed=0;
+
+  for(let dow=0; dow<7; dow++){
+    const team=teams[dow];
+    if(!team || team.length===0) continue;
+    for(const d of datesByDow[dow]){
+      const dk=dateKey(viewYear,viewMonth,d);
+      if(m[dk]) continue;                                       // preserve manual / existing
+      // 1) try the column's own fixed team (available & not on VL/OOO), least-loaded first
+      let pool=team.filter(id=>working(id,dow) && !onVL(id,dk));
+      let isBorrow=false;
+      if(pool.length===0){
+        // 2) overflow: borrow an available agent from another column
+        pool=members.filter(mm=>working(mm.id,dow) && !onVL(mm.id,dk)).map(mm=>mm.id).filter(id=>!team.includes(id));
+        isBorrow=true;
+      }
+      if(pool.length===0) continue;
+      const pick=argminId(pool);
+      m[dk]={memberId:pick, source:"auto"};
+      total[pick]++; assignedCount++; if(isBorrow) borrowed++;
+    }
+  }
+
+  saveAll(); renderActivation();
+  const activePool=members.filter(mm=>[0,1,2,3,4,5,6].some(dw=>working(mm.id,dw))).map(mm=>total[mm.id]);
+  const spread = activePool.length ? (Math.min(...activePool)+"-"+Math.max(...activePool)) : "0";
+  toast(assignedCount+" day(s) auto-assigned (load "+spread+"/CSR II"+(borrowed?(", "+borrowed+" borrowed to cover gaps"):"")+").","ok");
+}
+
+/* ============================================================
+   RENDER : VACATION LEAVE CALENDAR
+   ============================================================ */
+function renderVL(){
+  const t=document.getElementById("vlCal");
+  const firstDow=new Date(viewYear,viewMonth,1).getDay();
+  const dim=new Date(viewYear,viewMonth+1,0).getDate();
+  const cells=buildCalendarSkeleton(firstDow,dim);
+
+  let h="<thead><tr>";
+  for(let dow=0;dow<7;dow++) h+="<th class='dow'>"+DOW_FULL[dow]+"</th>";
+  h+="</tr></thead><tbody>";
+
+  for(let r=0;r<cells.length/7;r++){
+    h+="<tr>";
+    for(let c=0;c<7;c++){
+      const d=cells[r*7+c];
+      if(d===null){ h+="<td class='empty'></td>"; continue; }
+      const dk=dateKey(viewYear,viewMonth,d);
+      const cls=[DOW_CLASS[c]];
+      if(isToday(viewYear,viewMonth,d)) cls.push("today");
+      h+="<td class='"+cls.join(" ")+"' data-dk='"+dk+"'>";
+      h+="<span class='dnum'>"+d+"</span>";
+      (vlByDate[dk]||[]).forEach(mid=>{
+        const mem=memberById(mid);
+        h+="<span class='vlname'>"+escapeHtml(mem?firstName(mem.name):mid)
+          +(canEdit()?"<button data-dk='"+dk+"' data-mid='"+mid+"' class='vlrm'>&times;</button>":"")+"</span>";
+      });
+      let opts="<option value=''>+ add VL/OOO</option>";
+      members.forEach(mm=>{
+        if(!(vlByDate[dk]||[]).includes(mm.id))
+          opts+="<option value='"+mm.id+"'>"+escapeHtml(firstName(mm.name))+"</option>";
+      });
+      h+="<select class='vlsel' data-dk='"+dk+"'"+(canEdit()?"":" disabled")+">"+opts+"</select>";
+      h+="</td>";
+    }
+    h+="</tr>";
+  }
+  h+="</tbody>";
+  t.innerHTML=h;
+
+  t.querySelectorAll("select.vlsel").forEach(sel=>{
+    sel.addEventListener("change", e=>{
+      const dk=e.target.getAttribute("data-dk"), mid=e.target.value;
+      if(!mid) return;
+      if(!vlByDate[dk]) vlByDate[dk]=[];
+      if(!vlByDate[dk].includes(mid)) vlByDate[dk].push(mid);
+      // remove any onboarding assignment that conflicts with VL
+      const am=assignStore[monthKey()];
+      if(am && am[dk] && am[dk].memberId===mid) delete am[dk];
+      saveAll(); renderVL(); updateVLStats(); renderActivation();
+    });
+  });
+  t.querySelectorAll("button.vlrm").forEach(b=>{
+    b.addEventListener("click", e=>{
+      const dk=b.getAttribute("data-dk"), mid=b.getAttribute("data-mid");
+      vlByDate[dk]=(vlByDate[dk]||[]).filter(x=>x!==mid);
+      if(vlByDate[dk].length===0) delete vlByDate[dk];
+      saveAll(); renderVL(); updateVLStats();
+    });
+  });
+}
+function updateVLStats(){
+  let total=0; const memSet=new Set();
+  const prefix=dateKey(viewYear,viewMonth,1).slice(0,7);
+  Object.keys(vlByDate).forEach(dk=>{
+    if(dk.slice(0,7)===prefix){ (vlByDate[dk]||[]).forEach(mid=>{ total++; memSet.add(mid); }); }
+  });
+  document.getElementById("vlTotal").textContent=total;
+  document.getElementById("vlMembers").textContent=memSet.size+" / "+members.length;
+  document.getElementById("vlMonthLbl").textContent=MONTHS[viewMonth]+" "+viewYear;
+}
+
+/* ============================================================
+   TITLES / NAV
+   ============================================================ */
+function refreshTitles(){
+  document.getElementById("reportTitle").innerHTML=MONTHS[viewMonth]+" "+viewYear+" &mdash; For ACTIVATION Only";
+  document.getElementById("vlTitle").innerHTML="VL/OOO &mdash; "+MONTHS[viewMonth]+" "+viewYear;
+}
+function renderAll(){
+  loadMonthSchedule();   // point `schedule` at the selected month before rendering
+  refreshTitles();
+  renderSchedule();
+  renderActivation();
+  renderVL();
+  updateVLStats();
+}
+
+/* month/year selectors */
+function initSelectors(){
+  const ms=document.getElementById("monthSel");
+  ms.innerHTML=MONTHS.map((m,i)=>"<option value='"+i+"'"+(i===viewMonth?" selected":"")+">"+m+"</option>").join("");
+  const ys=document.getElementById("yearSel");
+  let yo="";
+  for(let y=TODAY.getFullYear()-2; y<=TODAY.getFullYear()+3; y++)
+    yo+="<option value='"+y+"'"+(y===viewYear?" selected":"")+">"+y+"</option>";
+  ys.innerHTML=yo;
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+/* ============================================================
+   EVENTS
+   ============================================================ */
+document.getElementById("tabReport").addEventListener("click",()=>{
+  document.getElementById("tabReport").classList.add("active");
+  document.getElementById("tabVL").classList.remove("active");
+  document.getElementById("viewReport").classList.remove("hidden");
+  document.getElementById("viewVL").classList.add("hidden");
+});
+document.getElementById("tabVL").addEventListener("click",()=>{
+  document.getElementById("tabVL").classList.add("active");
+  document.getElementById("tabReport").classList.remove("active");
+  document.getElementById("viewVL").classList.remove("hidden");
+  document.getElementById("viewReport").classList.add("hidden");
+  renderVL(); updateVLStats();
+});
+document.getElementById("schedHead").addEventListener("click",e=>{
+  if(e.target.closest("#resetSchedBtn")) return; // don't toggle when clicking the reset button
+  const head=document.getElementById("schedHead");
+  head.classList.toggle("collapsed");
+  document.getElementById("schedBody").classList.toggle("hidden");
+});
+document.getElementById("resetSchedBtn").addEventListener("click",e=>{
+  e.stopPropagation();
+  if(!canEdit()){ toast("Only the admin can edit the schedule.","err"); return; }
+  loadMonthSchedule();   // ensure `schedule` is the selected month, then reset only that month
+  members.forEach(m=>{ schedule[m.id]=["OFF","OFF","OFF","OFF","OFF","OFF","OFF"]; });
+  saveAll(); renderSchedule(); renderActivation();
+  toast("Shifts reset to OFF for "+MONTHS[viewMonth]+" "+viewYear+" only.","ok");
+});
+document.getElementById("monthSel").addEventListener("change",e=>{ viewMonth=+e.target.value; renderAll(); });
+document.getElementById("yearSel").addEventListener("change",e=>{ viewYear=+e.target.value; renderAll(); });
+document.getElementById("todayBtn").addEventListener("click",()=>{
+  viewYear=TODAY.getFullYear(); viewMonth=TODAY.getMonth();
+  initSelectors(); renderAll();
+});
+document.getElementById("autoBtn").addEventListener("click",autoAssign);
+document.getElementById("syncBtn").addEventListener("click",syncToSharePoint);
+document.getElementById("signInBtn").addEventListener("click",signIn);
+document.getElementById("signOutBtn").addEventListener("click",signOut);
+
+/* ============================================================
+   ROLE UI
+   ============================================================ */
+function updateRoleBadge(){
+  const b=document.getElementById("roleBadge");
+  if(signedIn && isAdmin){ b.className="badge admin"; b.textContent="Admin (full access)"; }
+  else if(signedIn && !isAdmin){ b.className="badge view"; b.textContent="Viewer (read-only)"; }
+  else { b.className="badge admin"; b.textContent="Local edit mode \u2014 sign in to sync"; }
+  document.getElementById("resetSchedBtn").style.display = canEdit() ? "" : "none";
+}
+function applyRole(){
+  updateRoleBadge();
+  renderAll();
+}
+
+/* ============================================================
+   AUTH  (RULES 2-5)
+   ============================================================ */
+async function getToken(){
+  const instance = await msalReady;
+  const account = instance.getActiveAccount() || instance.getAllAccounts()[0];
+  if(!account) throw new Error("Not signed in");
+  try{
+    const r = await instance.acquireTokenSilent({ scopes: SCOPES, account });
+    return r.accessToken;
+  }catch(e){
+    const r = await instance.acquireTokenPopup({ scopes: SCOPES });
+    return r.accessToken;
+  }
+}
+
+async function signIn(){
+  const instance = await msalReady;
+  try{
+    const res = await instance.loginPopup({ scopes: SCOPES, prompt: "select_account" });
+    instance.setActiveAccount(res.account);
+    await onSignedIn(res.account);
+  }catch(e){
+    /* ===== RULE 5 : popup error handling ===== */
+    if(e.errorCode === "popup_window_error" || e.errorCode === "empty_window_error"){
+      await instance.loginRedirect({ scopes: SCOPES });
+    }else if(e.errorCode === "user_cancelled"){
+      /* do nothing */
+    }else{
+      toast(e.message || "Sign-in failed", "err");
+    }
+  }
+}
+
+async function signOut(){
+  const instance = await msalReady;
+  signedIn=false; isAdmin=false; currentUserEmail="";
+  members = PLACEHOLDER_MEMBERS.slice();
+  document.getElementById("whoami").textContent="";
+  document.getElementById("signOutBtn").classList.add("hidden");
+  document.getElementById("signInBtn").classList.remove("hidden");
+  applyRole();
+  try{ await instance.logoutPopup({ account: instance.getActiveAccount() }); }
+  catch(e){ /* ignore */ }
+}
+
+async function onSignedIn(account){
+  signedIn=true;
+  currentUserEmail=(account.username||"").toLowerCase();
+  isAdmin = currentUserEmail === ADMIN_EMAIL.toLowerCase();
+  document.getElementById("whoami").textContent=account.name||account.username||"";
+  document.getElementById("signInBtn").classList.add("hidden");
+  document.getElementById("signOutBtn").classList.remove("hidden");
+  applyRole();
+  // fetch CSR 2 members from SharePoint
+  try{ await loadMembersFromSharePoint(); }
+  catch(e){ toast("Could not load members from SharePoint: "+e.message,"err"); }
+}
+
+/* ===== RULES 3 : button state controlled by msalReady ===== */
+msalReady.then(async (instance)=>{
+  try{
+    const resp = await instance.handleRedirectPromise();
+    if(resp && resp.account){
+      instance.setActiveAccount(resp.account);
+      await onSignedIn(resp.account);
+    }else{
+      const acc = instance.getAllAccounts()[0];
+      if(acc){ instance.setActiveAccount(acc); await onSignedIn(acc); }
+    }
+  }catch(e){ console.error(e); toast("Auth redirect error: "+(e.message||e),"err"); }
+  const btn=document.getElementById("signInBtn");
+  btn.disabled=false; btn.textContent="Sign in with SAP";
+}).catch(e=>{
+  toast("MSAL failed to initialize: "+(e.message||e),"err");
+  const btn=document.getElementById("signInBtn");
+  btn.textContent="Auth unavailable"; btn.disabled=true;
+});
+
+/* ============================================================
+   GRAPH / SHAREPOINT
+   ============================================================ */
+async function graph(path, opts){
+  const token=await getToken();
+  const r=await fetch(GRAPH+path, Object.assign({}, opts, {
+    headers: Object.assign({ "Authorization":"Bearer "+token, "Content-Type":"application/json" }, (opts&&opts.headers)||{})
+  }));
+  if(!r.ok){ throw new Error("Graph "+r.status+": "+(await r.text()).slice(0,180)); }
+  return r.status===204 ? null : r.json();
+}
+let _siteId=null;
+async function getSiteId(){ if(_siteId) return _siteId; const s=await graph("/sites/"+SITE_PATH); _siteId=s.id; return _siteId; }
+async function findList(title){
+  const siteId=await getSiteId();
+  const r=await graph("/sites/"+siteId+"/lists?$select=id,displayName,name&$top=200");
+  return (r.value||[]).find(l=>l.displayName===title || l.name===title);
+}
+
+/* field-name candidates (SharePoint internal names vary) */
+const NAME_FIELDS = ["FullName","EmployeeName","Name","Title","Agent","CSRName","field_1"];
+const DESIG_FIELDS= ["Designation","Role","Position","JobTitle","Title2","field_2"];
+const EMAIL_FIELDS= ["Email","EMail","WorkEmail","Mail","field_3"];
+function pick(fields, cands){ for(const c of cands){ if(fields[c]!=null && String(fields[c]).trim()!=="") return String(fields[c]).trim(); } return ""; }
+function isCSR2(v){ return /c\s*s\s*r\s*2/i.test(String(v).replace(/\s+/g,"")) || /csr\s*2/i.test(v) || String(v).replace(/\s+/g,"").toUpperCase()==="CSR2"; }
+
+async function loadMembersFromSharePoint(){
+  const list=await findList(MASTERLIST);
+  if(!list){ toast("List '"+MASTERLIST+"' not found; showing placeholders.","err"); return; }
+  const siteId=await getSiteId();
+  let url="/sites/"+siteId+"/lists/"+list.id+"/items?expand=fields&$top=200";
+  const out=[];
+  while(url){
+    const r=await graph(url.replace(GRAPH,""));
+    (r.value||[]).forEach(it=>{
+      const f=it.fields||{};
+      const desig=pick(f,DESIG_FIELDS);
+      if(isCSR2(desig)){
+        out.push({ id:it.id, name:pick(f,NAME_FIELDS)||("Item "+it.id), email:pick(f,EMAIL_FIELDS) });
+      }
+    });
+    url = r["@odata.nextLink"] ? r["@odata.nextLink"].replace(GRAPH,"") : null;
+  }
+  if(out.length){
+    members=out;
+    ensureSchedule(); saveAll();
+    toast("Loaded "+members.length+" CSR 2 member(s) from SharePoint.","ok");
+  }else{
+    toast("No CSR 2 members found in Masterlist; showing placeholders.","err");
+  }
+  renderAll();
+}
+
+/* sync current-month assignments to the Onboarding Activation Schedule list */
+async function syncToSharePoint(){
+  if(!signedIn){ toast("Sign in first to sync.","err"); return; }
+  if(!isAdmin){ toast("Only the admin can sync to SharePoint.","err"); return; }
+  try{
+    const list=await findList(SYNC_LIST);
+    if(!list){ toast("List '"+SYNC_LIST+"' not found.","err"); return; }
+    const siteId=await getSiteId();
+    // existing titles to avoid duplicates
+    const ex=await graph("/sites/"+siteId+"/lists/"+list.id+"/items?expand=fields&$top=500");
+    const existing=new Set((ex.value||[]).map(i=>(i.fields&&i.fields.Title)||""));
+    const am=assignMap();
+    let created=0, skipped=0, failed=0;
+    for(const dk of Object.keys(am)){
+      const rec=am[dk]; const mem=memberById(rec.memberId); if(!mem) continue;
+      const [y,mo,da]=dk.split("-").map(Number);
+      const title=dk+" | "+mem.name+" - run "+prevDayName(y,mo-1,da)+" report";
+      if(existing.has(title)){ skipped++; continue; }
+      try{
+        await graph("/sites/"+siteId+"/lists/"+list.id+"/items",{method:"POST",body:JSON.stringify({fields:{Title:title}})});
+        created++;
+      }catch(e){ failed++; }
+    }
+    toast("Sync done — created "+created+", skipped "+skipped+(failed?(", failed "+failed):""),"ok");
+  }catch(e){ toast("Sync failed: "+e.message,"err"); }
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+/* Schedule is per-month; every member defaults to OFF for all 7 days in each month. */
+loadMonthSchedule();
+initSelectors();
+updateRoleBadge();
+renderAll();
+</script>
+</body>
+</html>
