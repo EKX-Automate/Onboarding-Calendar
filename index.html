@@ -246,8 +246,9 @@ function getDashboardUrl(){
 const SITE_PATH   = "sap.sharepoint.com:/sites/214668";
 const MASTERLIST  = "USD Manila - Masterlist";
 const SYNC_LIST   = "Onboarding Activation Schedule";
-const DATA_LIST   = "CSR II Dashboard Data";   // self-provisioned backing store (JSON blobs)
-const DATA_COL    = "DataJson";                 // long-text column that holds the JSON
+const DATA_LIST   = "CSR II Dashboard Data";   // (legacy; no longer created)
+const DATA_FILE   = "csrii-dashboard-data.json"; // shared state stored as a file in the site document library
+const DATA_COL    = "DataJson";
 const GRAPH       = "https://graph.microsoft.com/v1.0";
 const SCOPES      = ["User.Read", "Sites.ReadWrite.All"];
 
@@ -1038,25 +1039,31 @@ async function findList(title){
 }
 
 /* field-name candidates (SharePoint internal names vary) */
-const NAME_FIELDS = ["FullName","EmployeeName","Name","Title","Agent","CSRName","field_1"];
-const DESIG_FIELDS= ["Designation","Role","Position","JobTitle","Title2","field_2"];
+const NAME_FIELDS = ["FullName","EmployeeName","Name","Title","Agent","CSRName","FullName0","PreferredName","DisplayName","field_1"];
+const DESIG_FIELDS= ["Designation","Role","Position","JobTitle","Title2","Account","field_2"];
 const EMAIL_FIELDS= ["Email","EMail","WorkEmail","Mail","field_3"];
 function pick(fields, cands){ for(const c of cands){ if(fields[c]!=null && String(fields[c]).trim()!=="") return String(fields[c]).trim(); } return ""; }
-function isCSR2(v){ return /c\s*s\s*r\s*2/i.test(String(v).replace(/\s+/g,"")) || /csr\s*2/i.test(v) || String(v).replace(/\s+/g,"").toUpperCase()==="CSR2"; }
+function isCSR2(v){ const s=String(v).replace(/\s+/g,"").toUpperCase(); return s==="CSR2" || /CSR2(\b|[^0-9])/.test(s) || /c\s*s\s*r\s*2/i.test(String(v)); }
+/* is this a CSR 2 row? check the designation candidates first, then ANY string field */
+function rowIsCSR2(f){
+  const d=pick(f,DESIG_FIELDS);
+  if(d) return isCSR2(d);
+  return Object.keys(f).some(k=>{ const v=f[k]; return typeof v==="string" && isCSR2(v); });
+}
 
 async function loadMembersFromSharePoint(){
   const list=await findList(MASTERLIST);
   if(!list){ toast("List '"+MASTERLIST+"' not found; showing placeholders.","err"); return; }
   const siteId=await getSiteId();
   let url="/sites/"+siteId+"/lists/"+list.id+"/items?expand=fields&$top=200";
-  const out=[];
+  const out=[]; let totalRows=0;
   while(url){
     const r=await graph(url.replace(GRAPH,""));
     (r.value||[]).forEach(it=>{
+      totalRows++;
       const f=it.fields||{};
-      const desig=pick(f,DESIG_FIELDS);
-      if(isCSR2(desig)){
-        out.push({ id:it.id, name:pick(f,NAME_FIELDS)||("Item "+it.id), email:pick(f,EMAIL_FIELDS) });
+      if(rowIsCSR2(f)){
+        out.push({ id:it.id, name:pick(f,NAME_FIELDS)||f.Title||("Item "+it.id), email:pick(f,EMAIL_FIELDS) });
       }
     });
     url = r["@odata.nextLink"] ? r["@odata.nextLink"].replace(GRAPH,"") : null;
@@ -1066,7 +1073,8 @@ async function loadMembersFromSharePoint(){
     ensureSchedule(); saveAll();
     toast("Loaded "+members.length+" CSR 2 member(s) from SharePoint.","ok");
   }else{
-    toast("No CSR 2 members found in Masterlist; showing placeholders.","err");
+    console.warn("[Masterlist] read "+totalRows+" rows but matched 0 CSR 2. Check the designation column name/value.");
+    toast("No CSR 2 members matched in Masterlist ("+totalRows+" rows read). Keeping existing roster.","err");
   }
   renderAll();
 }
@@ -1095,73 +1103,47 @@ function setCloudStatus(state){
   el.textContent=t; el.style.background=bg; el.style.color=fg;
 }
 
-/* ensure the backing list + DataJson column exist (auto-provision) */
-async function ensureDataList(){
-  if(_dataListId) return _dataListId;
+/* ---------- Document-library (drive) JSON store ----------
+   The shared state is a single JSON file in the site's default document library.
+   Writing a file needs only normal Contribute access (not list-creation rights),
+   and viewers read it with normal Read access. */
+async function driveGetJson(path){
   const siteId=await getSiteId();
-  let list=null;
-  try{ list=await findList(DATA_LIST); }catch(e){}
-  if(!list){
-    const created=await graph("/sites/"+siteId+"/lists",{method:"POST",body:JSON.stringify({
-      displayName: DATA_LIST,
-      list:{ template:"genericList" },
-      columns:[{ name:DATA_COL, text:{ allowMultipleLines:true, textType:"plain" } }]
-    })});
-    _dataListId=created.id;
-    return _dataListId;
-  }
-  _dataListId=list.id;
-  // make sure the DataJson column exists
-  try{
-    const cols=await graph("/sites/"+siteId+"/lists/"+_dataListId+"/columns?$select=name");
-    if(!(cols.value||[]).some(c=>c.name===DATA_COL)){
-      await graph("/sites/"+siteId+"/lists/"+_dataListId+"/columns",{method:"POST",body:JSON.stringify({
-        name:DATA_COL, text:{ allowMultipleLines:true, textType:"plain" }
-      })});
-    }
-  }catch(e){ /* column may already exist / insufficient rights to introspect */ }
-  return _dataListId;
+  const token=await getToken();
+  const r=await fetch(GRAPH+"/sites/"+siteId+"/drive/root:/"+encodeURIComponent(path)+":/content",{
+    headers:{ "Authorization":"Bearer "+token }
+  });
+  if(r.status===404) return null;                 // not created yet
+  if(!r.ok){ const t=await r.text().catch(()=> ""); console.error("[Drive GET error]",r.status,t); throw new Error("Graph GET "+r.status+" (drive file) — "+(t||"").slice(0,200)); }
+  return r.json();
+}
+async function drivePutJson(path, obj){
+  const siteId=await getSiteId();
+  const token=await getToken();
+  const r=await fetch(GRAPH+"/sites/"+siteId+"/drive/root:/"+encodeURIComponent(path)+":/content",{
+    method:"PUT",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify(obj)
+  });
+  if(!r.ok){ const t=await r.text().catch(()=> ""); console.error("[Drive PUT error]",r.status,t); throw new Error("Graph PUT "+r.status+" (drive file) — "+(t||"").slice(0,200)); }
+  return r.json();
 }
 
-/* read all app state from SharePoint into the in-memory stores (read-only for viewers) */
+/* read all app state from the shared JSON file into memory (read-only for viewers) */
 async function cloudLoadAll(){
   setCloudStatus("loading");
   try{
-    const siteId=await getSiteId();
-    // resolve the data list WITHOUT provisioning (viewers can't create lists/columns)
-    let listId=_dataListId;
-    if(!listId){
-      const list=await findList(DATA_LIST);
-      if(list){ listId=list.id; _dataListId=listId; }
-    }
-    if(!listId){
-      if(isAdmin){ listId=await ensureDataList(); }   // only the admin provisions it
-      else{
-        setCloudStatus("error");
-        toast("No shared data found yet. Ask the admin to open the dashboard and save once.","err");
-        return;
+    const data=await driveGetJson(DATA_FILE);
+    let got=false;
+    if(data && typeof data==="object"){
+      if(data.scheduleStore){ scheduleStore=data.scheduleStore; got=true; }
+      if(data.assignStore){ assignStore=data.assignStore; got=true; }
+      if(data.vlByDate){ vlByDate=data.vlByDate; got=true; }
+      const onlyPlaceholders = members.every(m=>String(m.id).startsWith("ph"));
+      if(data.members && data.members.length && onlyPlaceholders){
+        members = data.members.map(m=>({id:m.id,name:m.name,email:m.email||""}));
       }
     }
-    const r=await graph("/sites/"+siteId+"/lists/"+listId+"/items?expand=fields&$top=50");
-    _dataItemIndex={};
-    let got=false, cloudMembers=null;
-    (r.value||[]).forEach(it=>{
-      const f=it.fields||{}; const key=f.Title; if(!key) return;
-      _dataItemIndex[key]=it.id;
-      let val=null; try{ val=JSON.parse(f[DATA_COL]||"null"); }catch(e){ val=null; }
-      if(val==null) return;
-      if(key==="scheduleStore"){ scheduleStore=val; got=true; }
-      else if(key==="assignStore"){ assignStore=val; got=true; }
-      else if(key==="vlByDate"){ vlByDate=val; got=true; }
-      else if(key==="members"){ cloudMembers=val; }
-    });
-    // If we only have placeholder members (e.g. a viewer who can't read the Masterlist),
-    // use the roster saved in the shared list so names/assignments resolve correctly.
-    const onlyPlaceholders = members.every(m=>String(m.id).startsWith("ph"));
-    if(cloudMembers && cloudMembers.length && onlyPlaceholders){
-      members = cloudMembers.map(m=>({id:m.id,name:m.name,email:m.email||""}));
-    }
-    // mirror to local cache + re-point current month
     lsSet("csr_schedule_m",scheduleStore); lsSet("csr_assign",assignStore); lsSet("csr_vl",vlByDate);
     loadMonthSchedule();
     renderAll();
@@ -1169,48 +1151,30 @@ async function cloudLoadAll(){
     if(got) toast("Loaded dashboard data from SharePoint.","ok");
     else if(isAdmin) toast("Connected to SharePoint (no data yet) \u2014 saving your current data now\u2026","ok");
     else toast("Connected to SharePoint, but the admin hasn't saved any data yet.","err");
-    // cloud empty + admin: establish/migrate the store now so viewers get a valid shared copy
-    if(!got && isAdmin){
-      await cloudSaveNow();
-    }
+    if(!got && isAdmin){ await cloudSaveNow(); }   // establish the shared file so viewers can read
   }catch(e){
     setCloudStatus("error");
     toast("Could not load from SharePoint: "+(e.message||e),"err");
   }
 }
 
-/* upsert one key -> JSON blob */
-async function cloudUpsert(siteId, listId, key, obj){
-  const json=JSON.stringify(obj);
-  const existingId=_dataItemIndex[key];
-  if(existingId){
-    const r=await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+existingId+"/fields","PATCH",{[DATA_COL]:json});
-    return r.ok;
-  }
-  const created=await graph("/sites/"+siteId+"/lists/"+listId+"/items",{method:"POST",body:JSON.stringify({
-    fields:{ Title:key, [DATA_COL]:json }
-  })});
-  if(created && created.id) _dataItemIndex[key]=created.id;
-  return true;
-}
-
-/* write all three stores to SharePoint now (also refresh the human-facing calendar list) */
+/* write all state to the shared JSON file now (also refresh the human-facing calendar list) */
 let _cloudBusy=false, _cloudPending=false;
 async function cloudSaveNow(){
-  if(!signedIn){ return false; }
-  if(!isAdmin){ return false; }
+  if(!signedIn || !isAdmin) return false;
   if(_cloudBusy){ _cloudPending=true; return false; }
   _cloudBusy=true; setCloudStatus("saving");
   let ok=false;
   try{
-    const siteId=await getSiteId();
-    const listId=await ensureDataList();
-    await cloudUpsert(siteId, listId, "members",       members.map(m=>({id:m.id,name:m.name,email:m.email||""})));
-    await cloudUpsert(siteId, listId, "scheduleStore", scheduleStore);
-    await cloudUpsert(siteId, listId, "assignStore",   assignStore);
-    await cloudUpsert(siteId, listId, "vlByDate",       vlByDate);
+    const state={
+      members: members.map(m=>({id:m.id,name:m.name,email:m.email||""})),
+      scheduleStore, assignStore, vlByDate,
+      savedAt: new Date().toISOString(),
+      savedBy: currentUserEmail
+    };
+    await drivePutJson(DATA_FILE, state);
     // also mirror current-month assignments into the readable Onboarding Activation Schedule calendar
-    try{ await syncToSharePoint(true); }catch(e){}
+    try{ await syncToSharePoint(true); }catch(e){ console.warn("[calendar sync skipped]", e.message); }
     setCloudStatus("saved");
     ok=true;
   }catch(e){
