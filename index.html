@@ -845,7 +845,7 @@ document.getElementById("todayBtn").addEventListener("click",()=>{
   initSelectors(); renderAll();
 });
 document.getElementById("autoBtn").addEventListener("click",autoAssign);
-document.getElementById("syncBtn").addEventListener("click",()=>syncToSharePoint(false));
+document.getElementById("syncBtn").addEventListener("click",pushAllToSharePoint);
 document.getElementById("signInBtn").addEventListener("click",signIn);
 document.getElementById("signOutBtn").addEventListener("click",signOut);
 
@@ -958,8 +958,9 @@ async function signOut(){
 
 async function onSignedIn(account){
   signedIn=true;
-  currentUserEmail=(account.username||"").toLowerCase();
+  currentUserEmail=((account.username||account.email||"")+"").trim().toLowerCase();
   isAdmin = currentUserEmail === ADMIN_EMAIL.toLowerCase();
+  console.log("[auth] signed in as:", currentUserEmail, "| admin:", isAdmin);
   document.getElementById("whoami").textContent=account.name||account.username||"";
   document.getElementById("signInBtn").classList.add("hidden");
   document.getElementById("signOutBtn").classList.remove("hidden");
@@ -1084,6 +1085,7 @@ function setCloudStatus(state){
   const el=document.getElementById("cloudStatus"); if(!el) return;
   const map={
     local:   ["Local only",       "#eef1f5", "#6a7482"],
+    connected:["Connected to SharePoint",       "#d1e7ff", "#0b4a8a"],
     loading: ["Loading from SharePoint\u2026", "#fff4d6", "#8a6d1a"],
     saving:  ["Saving to SharePoint\u2026",     "#fff4d6", "#8a6d1a"],
     saved:   ["Saved to SharePoint",            "#d7f3dd", "#13703a"],
@@ -1163,12 +1165,12 @@ async function cloudLoadAll(){
     lsSet("csr_schedule_m",scheduleStore); lsSet("csr_assign",assignStore); lsSet("csr_vl",vlByDate);
     loadMonthSchedule();
     renderAll();
-    setCloudStatus(got ? "saved" : "local");
+    setCloudStatus(got ? "saved" : "connected");
     if(got) toast("Loaded dashboard data from SharePoint.","ok");
-    else if(isAdmin) toast("SharePoint store ready (empty) — your data will save here.","ok");
-    else toast("No shared data saved yet by the admin.","err");
-    // if cloud was empty but we have local data and we're admin, push it up as the initial migration
-    if(!got && isAdmin && (Object.keys(scheduleStore).length || Object.keys(assignStore).length || Object.keys(vlByDate).length)){
+    else if(isAdmin) toast("Connected to SharePoint (no data yet) \u2014 saving your current data now\u2026","ok");
+    else toast("Connected to SharePoint, but the admin hasn't saved any data yet.","err");
+    // cloud empty + admin: establish/migrate the store now so viewers get a valid shared copy
+    if(!got && isAdmin){
       await cloudSaveNow();
     }
   }catch(e){
@@ -1195,9 +1197,11 @@ async function cloudUpsert(siteId, listId, key, obj){
 /* write all three stores to SharePoint now (also refresh the human-facing calendar list) */
 let _cloudBusy=false, _cloudPending=false;
 async function cloudSaveNow(){
-  if(!(signedIn && isAdmin)) return;
-  if(_cloudBusy){ _cloudPending=true; return; }
+  if(!signedIn){ return false; }
+  if(!isAdmin){ return false; }
+  if(_cloudBusy){ _cloudPending=true; return false; }
   _cloudBusy=true; setCloudStatus("saving");
+  let ok=false;
   try{
     const siteId=await getSiteId();
     const listId=await ensureDataList();
@@ -1208,13 +1212,23 @@ async function cloudSaveNow(){
     // also mirror current-month assignments into the readable Onboarding Activation Schedule calendar
     try{ await syncToSharePoint(true); }catch(e){}
     setCloudStatus("saved");
+    ok=true;
   }catch(e){
     setCloudStatus("error");
-    toast("SharePoint save failed (kept locally): "+e.message,"err");
+    toast("SharePoint save failed (kept locally): "+(e.message||e),"err");
   }finally{
     _cloudBusy=false;
     if(_cloudPending){ _cloudPending=false; cloudSaveNow(); }
   }
+  return ok;
+}
+
+/* explicit admin action: push everything up now (migrate) */
+async function pushAllToSharePoint(){
+  if(!signedIn){ toast("Sign in with your SAP account first.","err"); return; }
+  if(!isAdmin){ toast("Only the admin ("+ADMIN_EMAIL+") can push data to SharePoint. You are signed in as "+(currentUserEmail||"unknown")+".","err"); return; }
+  const ok=await cloudSaveNow();
+  if(ok) toast("All dashboard data saved to SharePoint.","ok");
 }
 
 /* debounced auto-save on any change */
