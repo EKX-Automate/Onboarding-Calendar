@@ -1040,7 +1040,7 @@ async function findList(title){
 
 /* field-name candidates (SharePoint internal names vary) */
 const NAME_FIELDS = ["FullName","EmployeeName","Name","Title","Agent","CSRName","FullName0","PreferredName","DisplayName","field_1"];
-const DESIG_FIELDS= ["Designation","Role","Position","JobTitle","Title2","Account","field_2"];
+const DESIG_FIELDS= ["field_5","Designation","Role","Position","JobTitle","Title2","Account","field_2"];
 const EMAIL_FIELDS= ["Email","EMail","WorkEmail","Mail","field_3"];
 function pick(fields, cands){ for(const c of cands){ if(fields[c]!=null && String(fields[c]).trim()!=="") return String(fields[c]).trim(); } return ""; }
 function isCSR2(v){ const s=String(v).toUpperCase().replace(/[^A-Z0-9]/g,""); return s.indexOf("CSR2")>=0 || s.indexOf("CSRII")>=0; }
