@@ -1149,6 +1149,9 @@ async function cloudLoadAll(){
     if(cloudMembers && cloudMembers.length && onlyPlaceholders){
       members = cloudMembers.map(m=>({id:m.id,name:m.name,email:m.email||""}));
     }
+    // The "For ACTIVATION Only" calendar is driven by the Onboarding Activation Schedule
+    // list: read assignments back from it (it is the source of truth for the calendar).
+    await loadActivationFromList();
     lsSet("csr_schedule_m",scheduleStore); lsSet("csr_assign",assignStore); lsSet("csr_vl",vlByDate);
     loadMonthSchedule();
     renderAll();
@@ -1235,6 +1238,32 @@ async function getSyncListId(){
   }
   _syncListId = list.id;
   return _syncListId;
+}
+/* Read the "For ACTIVATION Only" calendar FROM the Onboarding Activation Schedule list.
+   Titles are "YYYY-MM-DD | <Full Name> - run <day> report"; we parse date + name and
+   map the name back to a member, rebuilding assignStore so the list drives the calendar. */
+async function loadActivationFromList(){
+  try{
+    const siteId=await getSiteId();
+    const listId=await getSyncListId();
+    const r=await graph("/sites/"+siteId+"/lists/"+listId+"/items?expand=fields&$top=500");
+    const nameIndex={}; members.forEach(m=>{ nameIndex[(m.name||"").trim().toLowerCase()]=m.id; });
+    const byMonth={};
+    (r.value||[]).forEach(it=>{
+      const t=(it.fields&&it.fields.Title)||"";
+      const mm=t.match(/^(\d{4})-(\d{2})-(\d{2})\s*\|\s*(.+?)\s*-\s*run\s/i);
+      if(!mm) return;
+      const y=+mm[1], mo=+mm[2]-1, da=+mm[3], name=mm[4].trim();
+      const mid=nameIndex[name.toLowerCase()];
+      if(!mid) return;
+      const mk=y+"-"+mo;
+      const dk=y+"-"+String(mo+1).padStart(2,"0")+"-"+String(da).padStart(2,"0");
+      (byMonth[mk]=byMonth[mk]||{})[dk]={ memberId:mid, source:"list" };
+    });
+    assignStore=byMonth;
+    lsSet("csr_assign",assignStore);
+    return true;
+  }catch(e){ console.warn("[activation list load]", e.message||e); return false; }
 }
 function assignTitle(dk, mem){
   const [y,mo,da]=dk.split("-").map(Number);
