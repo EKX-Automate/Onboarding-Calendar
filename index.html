@@ -291,6 +291,7 @@ function getDashboardUrl(){
 const SITE_PATH   = "sap.sharepoint.com:/sites/214668";
 const MASTERLIST  = "USD Manila - Masterlist";
 const SYNC_LIST   = "Onboarding Activation Schedule";
+const SHIFT_LIST  = "CSR II Shifts";            // publishes shift start times for reminders
 const DATA_LIST   = "CSR II Dashboard Data";   // (legacy; no longer created)
 const DATA_FILE   = "csrii-dashboard-data.json"; // shared state stored as a file in the site document library
 const DATA_COL    = "DataJson";
@@ -1327,6 +1328,53 @@ async function pushAllToSharePoint(){
   if(!isAdmin){ toast("Only the admin ("+ADMIN_EMAIL+") can push data to SharePoint. You are signed in as "+(currentUserEmail||"unknown")+".","err"); return; }
   const ok=await cloudSaveNow();
   if(ok) toast("All dashboard data saved to SharePoint.","ok");
+  // also publish shift start times (for shift-start reminders)
+  try{ await publishShifts(); }catch(e){ console.warn("[publishShifts]", e.message); }
+}
+
+/* Convert a shift string like "7:00 PM - 4:00 AM" to a 24-hour start "19:00" */
+function shiftStart24(s){
+  if(!s || s==="OFF") return "";
+  const start=(s.split(" - ")[0]||"").trim();
+  const m=start.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if(!m) return "";
+  let h=(+m[1])%12; if(/pm/i.test(m[3])) h+=12;
+  return String(h).padStart(2,"0")+":"+m[2];
+}
+
+/* Publish each member's shift start time (for TODAY's quarter) to the CSR II Shifts list.
+   One row per member per working weekday: Title=name, Weekday=Sun..Sat, Start=HH:mm.
+   Lets the shift-start reminder flow look up when to notify. Admin only. */
+async function publishShifts(){
+  if(!(signedIn && isAdmin)) return;
+  const siteId=await getSiteId();
+  const list=await findList(SHIFT_LIST);
+  if(!list){ toast("List '"+SHIFT_LIST+"' not found \u2014 create it (Title, Weekday, Start) to enable shift-start reminders.","err"); return; }
+  const listId=list.id;
+  // today's quarter schedule (so published shifts match the live schedule)
+  const qBase=Math.floor(TODAY.getMonth()/3)*3;
+  const sched=scheduleStore[TODAY.getFullYear()+"-"+qBase]||{};
+  // desired rows
+  const desired={};
+  members.forEach(m=>{
+    const arr=sched[m.id]||["OFF","OFF","OFF","OFF","OFF","OFF","OFF"];
+    for(let dow=0;dow<7;dow++){
+      const st=shiftStart24(arr[dow]);
+      if(st) desired[m.name+"|"+WEEKDAYS[dow]]={Title:m.name, Weekday:WEEKDAYS[dow], Start:st};
+    }
+  });
+  // existing rows
+  const ex=await graph("/sites/"+siteId+"/lists/"+listId+"/items?expand=fields&$top=500");
+  const existing={};
+  (ex.value||[]).forEach(it=>{ const f=it.fields||{}; existing[(f.Title||"")+"|"+(f.Weekday||"")]={id:it.id,start:(f.Start||"")}; });
+  let created=0, updated=0, removed=0;
+  for(const key of Object.keys(desired)){
+    const d=desired[key], cur=existing[key];
+    if(cur){ if(cur.start!==d.Start){ await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+cur.id+"/fields","PATCH",{Start:d.Start}); updated++; } delete existing[key]; }
+    else { await graph("/sites/"+siteId+"/lists/"+listId+"/items",{method:"POST",body:JSON.stringify({fields:{Title:d.Title,Weekday:d.Weekday,Start:d.Start}})}); created++; }
+  }
+  for(const key of Object.keys(existing)){ await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+existing[key].id,"DELETE"); removed++; }
+  toast("Shift times published ("+created+" new, "+updated+" updated, "+removed+" removed).","ok");
 }
 
 /* debounced auto-save on any change */
