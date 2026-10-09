@@ -151,7 +151,7 @@
     <span class="divider"></span>
     <h1>USD Onboarding Schedule</h1>
     <span class="spacer"></span>
-    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-07</span>
+    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-08 (shifts)</span>
   </div>
 
   <!-- TOP BAR -->
@@ -1329,7 +1329,8 @@ async function pushAllToSharePoint(){
   const ok=await cloudSaveNow();
   if(ok) toast("All dashboard data saved to SharePoint.","ok");
   // also publish shift start times (for shift-start reminders)
-  try{ await publishShifts(); }catch(e){ console.warn("[publishShifts]", e.message); }
+  try{ await publishShifts(); }
+  catch(e){ console.error("[publishShifts]", e); toast("Shift publish failed: "+(e.message||e),"err"); }
 }
 
 /* Convert a shift string like "7:00 PM - 4:00 AM" to a 24-hour start "19:00" */
@@ -1351,6 +1352,16 @@ async function publishShifts(){
   const list=await findList(SHIFT_LIST);
   if(!list){ toast("List '"+SHIFT_LIST+"' not found \u2014 create it (Title, Weekday, Start) to enable shift-start reminders.","err"); return; }
   const listId=list.id;
+  // detect the real internal names of the Weekday / Start columns (handles slight naming)
+  let wdCol="Weekday", stCol="Start";
+  try{
+    const cols=await graph("/sites/"+siteId+"/lists/"+listId+"/columns?$select=name,displayName");
+    const all=(cols.value||[]);
+    const find=(cands)=>{ for(const c of all){ const n=(c.name||"").toLowerCase(), d=(c.displayName||"").toLowerCase(); if(cands.some(x=>n===x||d===x)) return c.name; } return null; };
+    wdCol=find(["weekday","day"])||wdCol;
+    stCol=find(["start","shiftstart","starttime","time"])||stCol;
+    console.log("[publishShifts] columns -> Weekday:",wdCol,"Start:",stCol,"| all:",all.map(c=>c.name).join(", "));
+  }catch(e){ console.warn("[publishShifts] column detect failed, using defaults",e.message); }
   // today's quarter schedule (so published shifts match the live schedule)
   const qBase=Math.floor(TODAY.getMonth()/3)*3;
   const sched=scheduleStore[TODAY.getFullYear()+"-"+qBase]||{};
@@ -1360,18 +1371,21 @@ async function publishShifts(){
     const arr=sched[m.id]||["OFF","OFF","OFF","OFF","OFF","OFF","OFF"];
     for(let dow=0;dow<7;dow++){
       const st=shiftStart24(arr[dow]);
-      if(st) desired[m.name+"|"+WEEKDAYS[dow]]={Title:m.name, Weekday:WEEKDAYS[dow], Start:st};
+      if(st) desired[m.name+"|"+WEEKDAYS[dow]]={ Title:m.name, [wdCol]:WEEKDAYS[dow], [stCol]:st };
     }
   });
+  const desiredCount=Object.keys(desired).length;
+  console.log("[publishShifts] quarter key:", TODAY.getFullYear()+"-"+qBase, "| shift rows to publish:", desiredCount);
+  if(desiredCount===0){ toast("No shifts to publish \u2014 this quarter's schedule has no shift times set (all OFF), or the schedule isn't loaded. Open the current month and set shifts, then Sync.","err"); return; }
   // existing rows
   const ex=await graph("/sites/"+siteId+"/lists/"+listId+"/items?expand=fields&$top=500");
   const existing={};
-  (ex.value||[]).forEach(it=>{ const f=it.fields||{}; existing[(f.Title||"")+"|"+(f.Weekday||"")]={id:it.id,start:(f.Start||"")}; });
+  (ex.value||[]).forEach(it=>{ const f=it.fields||{}; existing[(f.Title||"")+"|"+(f[wdCol]||"")]={id:it.id,start:(f[stCol]||"")}; });
   let created=0, updated=0, removed=0;
   for(const key of Object.keys(desired)){
     const d=desired[key], cur=existing[key];
-    if(cur){ if(cur.start!==d.Start){ await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+cur.id+"/fields","PATCH",{Start:d.Start}); updated++; } delete existing[key]; }
-    else { await graph("/sites/"+siteId+"/lists/"+listId+"/items",{method:"POST",body:JSON.stringify({fields:{Title:d.Title,Weekday:d.Weekday,Start:d.Start}})}); created++; }
+    if(cur){ if(cur.start!==d[stCol]){ await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+cur.id+"/fields","PATCH",{[stCol]:d[stCol]}); updated++; } delete existing[key]; }
+    else { await graph("/sites/"+siteId+"/lists/"+listId+"/items",{method:"POST",body:JSON.stringify({fields:d})}); created++; }
   }
   for(const key of Object.keys(existing)){ await graphRaw("/sites/"+siteId+"/lists/"+listId+"/items/"+existing[key].id,"DELETE"); removed++; }
   toast("Shift times published ("+created+" new, "+updated+" updated, "+removed+" removed).","ok");
