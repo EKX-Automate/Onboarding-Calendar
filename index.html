@@ -97,7 +97,7 @@
   .cal td.todaycol{box-shadow:inset 0 0 0 9999px rgba(27,144,255,.06);}
   .assign{margin-top:4px;font-size:11.5px;color:#13203a;font-weight:700;line-height:1.25;}
   .assign .sf{display:block;font-weight:500;color:#5b6676;font-size:10.5px;margin-top:1px;}
-  .assign .teamsremind{display:inline-block;margin-top:3px;font-size:10.5px;font-weight:700;color:#4b53bc;cursor:pointer;text-decoration:underline;}
+  .assign .teamsremind{display:none;}
   .cal td select.assignsel,.cal td select.vlsel{width:100%;margin-top:4px;font-size:11px;padding:3px;border:1px solid #c7cfdb;border-radius:5px;background:rgba(255,255,255,.7);}
   .vlname{display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid #f0c9c9;color:#b5321f;
     font-weight:700;font-size:11px;border-radius:5px;padding:2px 6px;margin-top:3px;}
@@ -151,7 +151,7 @@
     <span class="divider"></span>
     <h1>USD Onboarding Schedule</h1>
     <span class="spacer"></span>
-    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-08 (open)</span>
+    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-09</span>
   </div>
 
   <!-- TOP BAR -->
@@ -664,7 +664,6 @@ function renderActivation(){
         const nm=mem?firstName(mem.name):"(unknown)";
         h+="<div class='assign'>"+escapeHtml(nm)+" - run "+prevDayName(viewYear,viewMonth,d)+" report"
           +"<span class='sf'>Add Email to SF</span>"
-          +(mem&&canEdit()?"<span class='teamsremind' data-dk='"+dk+"' data-mid='"+rec.memberId+"'>Remind in Teams</span>":"")
           +"</div>";
       }
       if(isAssignable){
@@ -883,24 +882,8 @@ document.getElementById("signInBtn").addEventListener("click",signIn);
 document.getElementById("signOutBtn").addEventListener("click",signOut);
 document.getElementById("deniedSignOut").addEventListener("click",signOut);
 
-/* Teams reminder — opens a Teams chat to the assigned CSR II with a prefilled message */
-function remindInTeams(dk, mid){
-  const mem=memberById(mid);
-  if(!mem){ toast("Member not found for reminder.","err"); return; }
-  const parts=dk.split("-").map(Number); const y=parts[0], mo=parts[1], da=parts[2];
-  const dateStr=MONTHS[mo-1]+" "+da+", "+y;
-  const prev=prevDayName(y,mo-1,da);
-  const msg="USD Onboarding Schedule reminder: You are assigned to Onboarding Activation on "+dateStr+". Please run the "+prev+" report.";
-  const email=(mem.email||"").trim();
-  if(!email){ toast("No email on file for "+firstName(mem.name)+" — can't open a Teams chat. Add their email in the Masterlist.","err"); return; }
-  const url="https://teams.microsoft.com/l/chat/0/0?users="+encodeURIComponent(email)+"&message="+encodeURIComponent(msg);
-  window.open(url, "_blank", "noopener");
-  toast("Opening Teams chat to remind "+firstName(mem.name)+"\u2026","ok");
-}
-document.getElementById("activationCal").addEventListener("click", e=>{
-  const el=e.target.closest(".teamsremind"); if(!el) return;
-  remindInTeams(el.getAttribute("data-dk"), el.getAttribute("data-mid"));
-});
+/* Teams reminders are handled automatically by the Power Automate flow
+   (shift-start + 4-hour DMs), so the in-calendar "Remind in Teams" link was removed. */
 
 /* ---------- Share link + Settings (Dashboard URL) ---------- */
 function copyShareLink(){
@@ -951,6 +934,10 @@ function updateRoleBadge(){
   else if(signedIn && !isAdmin){ b.className="badge view"; b.textContent="Viewer (read-only)"; }
   else { b.className="badge admin"; b.textContent="Local edit mode \u2014 sign in to sync"; }
   document.getElementById("resetSchedBtn").style.display = canEdit() ? "" : "none";
+  // Admin-only action buttons: hidden for viewers
+  const adminOnly = (signedIn && isAdmin) ? "" : "none";
+  document.getElementById("autoBtn").style.display = adminOnly;
+  document.getElementById("syncBtn").style.display = adminOnly;
   const bn=document.getElementById("signinBanner"); if(bn) bn.classList.toggle("hidden", signedIn);
 }
 function applyRole(){
