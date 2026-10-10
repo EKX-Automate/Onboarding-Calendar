@@ -151,7 +151,7 @@
     <span class="divider"></span>
     <h1>USD Onboarding Schedule</h1>
     <span class="spacer"></span>
-    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-08 (shifts)</span>
+    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-08 (open)</span>
   </div>
 
   <!-- TOP BAR -->
@@ -272,14 +272,15 @@
 /* ---------- Admin ---------- */
 const ADMIN_EMAIL = "ma.theresa.cassandra.choy@sap.com";
 
-/* ---------- Viewer allow-list ----------
-   Only the admin + these approved emails may view the dashboard data. Everyone else
-   who signs in is blocked. The admin can edit this list in Settings; it is stored in
-   SharePoint (shared). This is a UI gate — real security is SharePoint list permissions. */
+/* ---------- Access mode ----------
+   OPEN access: anyone with the link who signs in can VIEW (read-only). Editing stays
+   admin-only. (The viewer allow-list below is kept for reference but not enforced while
+   OPEN_ACCESS is true. Real security is still SharePoint list permissions.) */
+const OPEN_ACCESS = true;
 const DEFAULT_VIEWERS = ["randy.tran@sap.com"];
 let viewers = (function(){ try{ return JSON.parse(localStorage.getItem("csr_viewers")) || DEFAULT_VIEWERS.slice(); }catch(e){ return DEFAULT_VIEWERS.slice(); } }).call().map(e=>String(e).trim().toLowerCase()).filter(Boolean);
 function isAllowedViewer(email){ return viewers.includes((email||"").trim().toLowerCase()); }
-function canView(){ return !signedIn || isAdmin || isAllowedViewer(currentUserEmail); }
+function canView(){ return OPEN_ACCESS || !signedIn || isAdmin || isAllowedViewer(currentUserEmail); }
 
 /* ---------- Dashboard URL (used for sign-in redirect, shareable links & emails) ---------- */
 const DEFAULT_DASHBOARD_URL = "https://ekx-automate.github.io/Onboarding-Calendar/";
@@ -1016,12 +1017,14 @@ async function signOut(){
   document.getElementById("signInBtn").classList.remove("hidden");
   hideAccessDenied();
   applyRole();
+  try{ sessionStorage.setItem("csr_signedout","1"); }catch(e){}   // don't auto-SSO back in this session
   try{ await instance.logoutPopup({ account: instance.getActiveAccount() }); }
   catch(e){ /* ignore */ }
 }
 
 async function onSignedIn(account){
   signedIn=true;
+  try{ sessionStorage.removeItem("csr_signedout"); sessionStorage.removeItem("csr_autologin_attempt"); }catch(e){}
   currentUserEmail=((account.username||account.email||"")+"").trim().toLowerCase();
   isAdmin = currentUserEmail === ADMIN_EMAIL.toLowerCase();
   console.log("[auth] signed in as:", currentUserEmail, "| admin:", isAdmin);
@@ -1039,20 +1042,38 @@ async function onSignedIn(account){
   _suppressCloudSave = false;
 }
 
-/* ===== RULES 3 : button state controlled by msalReady ===== */
+/* ===== RULES 3 : button state + automatic SSO sign-in ===== */
 msalReady.then(async (instance)=>{
+  const btn=document.getElementById("signInBtn");
+  const enable=()=>{ btn.disabled=false; btn.textContent="Sign in with SAP"; };
+  let account=null;
   try{
     const resp = await instance.handleRedirectPromise();
-    if(resp && resp.account){
-      instance.setActiveAccount(resp.account);
-      await onSignedIn(resp.account);
-    }else{
-      const acc = instance.getAllAccounts()[0];
-      if(acc){ instance.setActiveAccount(acc); await onSignedIn(acc); }
-    }
+    account = (resp && resp.account) || instance.getActiveAccount() || instance.getAllAccounts()[0] || null;
   }catch(e){ console.error(e); toast("Auth redirect error: "+(e.message||e),"err"); }
-  const btn=document.getElementById("signInBtn");
-  btn.disabled=false; btn.textContent="Sign in with SAP";
+
+  // Already have a session -> sign in automatically
+  if(account){ instance.setActiveAccount(account); await onSignedIn(account); enable(); return; }
+
+  // Respect an explicit sign-out for this browser session (don't auto-SSO back in)
+  let signedOut=false; try{ signedOut=!!sessionStorage.getItem("csr_signedout"); }catch(e){}
+  if(signedOut){ enable(); return; }
+
+  // 1) Silent SSO using an existing Microsoft session (no popup, no navigation)
+  btn.textContent="Signing in\u2026";
+  try{
+    const res = await instance.ssoSilent({ scopes: SCOPES });
+    if(res && res.account){ instance.setActiveAccount(res.account); await onSignedIn(res.account); enable(); return; }
+  }catch(e){ console.log("[sso] ssoSilent unavailable:", e.errorCode||e.message); }
+
+  // 2) One-time seamless redirect SSO (guarded against loops)
+  let tried=false; try{ tried=!!sessionStorage.getItem("csr_autologin_attempt"); }catch(e){}
+  if(!tried){
+    try{ sessionStorage.setItem("csr_autologin_attempt","1"); }catch(e){}
+    try{ await instance.loginRedirect({ scopes: SCOPES }); return; }   // navigates to Microsoft, returns signed in
+    catch(e){ console.error("[sso] loginRedirect failed", e); }
+  }
+  enable();   // fall back to manual button
 }).catch(e=>{
   toast("MSAL failed to initialize: "+(e.message||e),"err");
   const btn=document.getElementById("signInBtn");
