@@ -171,7 +171,7 @@
     <span class="divider"></span>
     <h1>USD Onboarding Schedule</h1>
     <span class="spacer"></span>
-    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-14 (carryover-nextday)</span>
+    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-14b (email-snip)</span>
   </div>
 
   <!-- TOP BAR -->
@@ -1056,8 +1056,8 @@ function buildEmailBodyHTML(monthLabel, url, coverDays){
   return "<div style=\"font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1a1a1a;\">"
     + "<p>Hi Team,</p>"
     + "<p>Please be advised that our <b>"+monthLabel+"</b> calendar is now available via this <a href=\""+url+"\">Link</a>.</p>"
-    + "<p id=\"ecSnipHolder\"><img id=\"ecSnip\" alt=\"Activation calendar\" /></p>"
     + randy
+    + "<p id=\"ecSnipHolder\"><img id=\"ecSnip\" alt=\"Activation calendar\" style=\"width:620px;max-width:100%;height:auto;\" /></p>"
     + "<p>Reminder: To ensure you don't miss your onboarding schedule, please send yourself a calendar invite as a reminder.</p>"
     + "<p>Kind Regards,<br>Ma. Theresa Cassandra Choy<br>User Support Representative III, ES: User Support Desk<br>Concur (Philippines) Inc. Alphaland Southgate Tower, 1231 Manila, Philippines<br>E: ma.theresa.cassandra.choy@sap.com<br>T: +1 484 422 5825</p>"
     + "<p><img id=\"ecBanner\" src=\""+USD_BANNER_B64+"\" style=\"width:300px;height:auto;\" alt=\"USD\"></p>"
@@ -1068,8 +1068,18 @@ function buildEmailBodyHTML(monthLabel, url, coverDays){
 async function captureActivationSnip(){
   const el=document.getElementById("activationCal");
   if(!el || typeof html2canvas!=="function") return null;
-  try{ const canvas=await html2canvas(el, {backgroundColor:"#ffffff", scale:1.5, useCORS:true}); return canvas.toDataURL("image/png"); }
+  // Clean clone: drop the left spacer column and the interactive controls so the
+  // emailed image starts flush-left and reads like a report.
+  const clone=el.cloneNode(true);
+  Array.prototype.forEach.call(clone.querySelectorAll("col.spacer, .spacer, select, button"), function(n){ if(n.parentNode) n.parentNode.removeChild(n); });
+  const holder=document.createElement("div");
+  holder.style.cssText="position:fixed;left:-10000px;top:0;background:#ffffff;";
+  clone.style.width="auto";
+  holder.appendChild(clone);
+  document.body.appendChild(holder);
+  try{ const canvas=await html2canvas(clone, {backgroundColor:"#ffffff", scale:2, useCORS:true}); return canvas.toDataURL("image/png"); }
   catch(e){ console.warn("[snip] html2canvas failed", e); return null; }
+  finally{ if(holder.parentNode) document.body.removeChild(holder); }
 }
 
 async function openEmailComposer(){
