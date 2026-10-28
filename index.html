@@ -171,7 +171,7 @@
     <span class="divider"></span>
     <h1>USD Onboarding Schedule</h1>
     <span class="spacer"></span>
-    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-13 (carryover-ct)</span>
+    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-14 (carryover-nextday)</span>
   </div>
 
   <!-- TOP BAR -->
@@ -513,37 +513,31 @@ function shiftStartMinFor(memId,y,m,d){
   if(!hhmm) return Infinity;
   return parseInt(hhmm.slice(0,2),10)*60 + parseInt(hhmm.slice(3,5),10);
 }
-/* A Manila-plotted 12:00/12:30 AM (GY) shift is actually worked on the PREVIOUS day in
-   Central Time; daytime shifts are worked on their plotted day. */
-function isMidnightStart(mn){ return mn>=0 && mn<60; }   // 12:00-12:59 AM Manila
+/* Agents whose shift starts 12:00 AM - 2:00 AM (Manila) actually report the NEXT
+   calendar day: e.g. a "Monday" 12:30 AM shift is worked at 12:30 AM on Tuesday.
+   So after a Sat+Sun rest, a 12:30 AM agent's first working day is Tuesday.
+   Daytime shifts (after 2:00 AM) are worked on their plotted day. */
+function startsNextDay(mn){ return mn>=0 && mn<=120; }   // 12:00-2:00 AM -> +1 day
 
-/* Carry-over target for an absence day D: the agent who starts working SOONEST (in CT)
-   on/after the next day. A midnight agent plotted on Manila day X covers CT day X-1, so
-   to cover CT day D+T they must be plotted on Manila day D+T+1; a daytime agent covers
-   CT day D+T when plotted on Manila day D+T. We take the earliest CT day T>=1 that has an
-   eligible agent, then the earliest plotted start among them. Cascades forward. */
+/* Carry-over target for an absence day D: the eligible agent who ACTUALLY reports
+   soonest after D (applying the +1 day for 12AM-2AM shifts); earliest start breaks ties.
+   Scans forward (cascades) and picks the globally earliest actual report date. */
 function earliestAgentFromNextDay(y,m,d,maxLook){
   maxLook=maxLook||21;
-  for(let T=1;T<=maxLook;T++){
-    const cands=[];
-    // daytime agents plotted on CT day D+T (same Manila day)
-    const dx=new Date(y,m,d+T);
-    eligibleOnDate(dx.getFullYear(),dx.getMonth(),dx.getDate()).forEach(function(id){
-      const mn=shiftStartMinFor(id,dx.getFullYear(),dx.getMonth(),dx.getDate());
-      if(!isMidnightStart(mn)) cands.push({id:id,start:mn,plot:dx});
+  const base=Date.UTC(y,m,d);          // the absence day itself
+  let best=null;
+  for(let k=1;k<=maxLook;k++){
+    const px=new Date(y,m,d+k);
+    const Y=px.getFullYear(), M=px.getMonth(), D=px.getDate();
+    eligibleOnDate(Y,M,D).forEach(function(id){
+      const mn=shiftStartMinFor(id,Y,M,D);
+      const off=startsNextDay(mn)?1:0;
+      const wd=Date.UTC(Y,M,D+off);     // actual report date
+      if(wd<=base) return;              // must be strictly after the absence day
+      if(!best || wd<best.wd || (wd===best.wd && mn<best.start)){ best={id:id,start:mn,wd:wd,plot:px}; }
     });
-    // midnight (GY) agents plotted on Manila day D+T+1 -> their CT working day is D+T
-    const dm=new Date(y,m,d+T+1);
-    eligibleOnDate(dm.getFullYear(),dm.getMonth(),dm.getDate()).forEach(function(id){
-      const mn=shiftStartMinFor(id,dm.getFullYear(),dm.getMonth(),dm.getDate());
-      if(isMidnightStart(mn)) cands.push({id:id,start:mn,plot:dm});
-    });
-    if(cands.length){
-      cands.sort(function(a,b){ return a.start-b.start; });
-      return { memberId:cands[0].id, date:cands[0].plot };
-    }
   }
-  return null;
+  return best ? { memberId:best.id, date:best.plot } : null;
 }
 /* true when NO CSR II is scheduled+available to run activation that day */
 function isAbsenceDay(y,m,d){ return eligibleOnDate(y,m,d).length===0; }
