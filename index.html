@@ -171,7 +171,7 @@
     <span class="divider"></span>
     <h1>USD Onboarding Schedule</h1>
     <span class="spacer"></span>
-    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-14e (email-snip)</span>
+    <span style="color:rgba(255,255,255,.6);font-size:11px;font-weight:600;">build 2026-10-14f (email-snip)</span>
   </div>
 
   <!-- TOP BAR -->
@@ -1049,7 +1049,7 @@ function buildEmailBodyHTML(monthLabel, url, coverDays){
   if(coverDays.length){
     randy = coverDays.map(function(c){
       const ds = MONTHS[viewMonth]+" "+c.day+", "+viewYear;
-      const who = c.name ? escapeHtml(c.name) : "[CSR II Name]";
+      const who = c.name ? escapeHtml(firstName(c.name)) : "[CSR II Name]";
       return "<p>Hi <b>"+who+"</b>,<br><br>Please be advised that you are assigned to take over the activation in the absence of the designated activator on <b>"+ds+"</b>, as the only CSR II scheduled for that day will be on leave.<br><br>Thank you for your understanding and support.</p>";
     }).join("");
   }
